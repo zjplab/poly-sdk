@@ -1436,7 +1436,7 @@ export class MarketService {
     maxMinutesUntilEnd?: number;
     limit?: number;
     sortBy?: 'endDate' | 'volume' | 'liquidity';
-    duration?: '5m' | '15m' | 'all';
+    duration?: '5m' | '15m' | '1h' | '4h' | 'all';
     coin?: 'BTC' | 'ETH' | 'SOL' | 'XRP' | 'all';
   }): Promise<GammaMarket[]> {
     if (!this.gammaApi) {
@@ -1454,28 +1454,75 @@ export class MarketService {
 
     // Duration to interval seconds mapping
     const durationIntervals: Record<string, number> = {
-      '5m': 300,   // 5 minutes in seconds
-      '15m': 900,  // 15 minutes in seconds
+      '5m': 300,    // 5 minutes in seconds
+      '15m': 900,   // 15 minutes in seconds
+      '1h': 3600,   // 1 hour in seconds
+      '4h': 14400,  // 4 hours in seconds
     };
+
+    // Coin short → full name mapping (for 1h slug format)
+    const coinFullNames: Record<string, string> = {
+      btc: 'bitcoin',
+      eth: 'ethereum',
+      sol: 'solana',
+      xrp: 'xrp',
+    };
+
+    // Month names for 1h slug format
+    const monthNames = [
+      'january', 'february', 'march', 'april', 'may', 'june',
+      'july', 'august', 'september', 'october', 'november', 'december',
+    ];
 
     // Supported coins
     const allCoins = ['btc', 'eth', 'sol', 'xrp'] as const;
     const targetCoins = coin === 'all' ? allCoins : [coin.toLowerCase()];
 
     // Target durations
-    const targetDurations = duration === 'all' ? ['5m', '15m'] : [duration];
+    const targetDurations = duration === 'all' ? ['5m', '15m', '1h', '4h'] : [duration];
 
     // Calculate time slots to fetch
     const nowSeconds = Math.floor(Date.now() / 1000);
     const minEndSeconds = nowSeconds + minMinutesUntilEnd * 60;
     const maxEndSeconds = nowSeconds + maxMinutesUntilEnd * 60;
 
+    /**
+     * Generate 1h slug in ET (Eastern Time) format.
+     * Pattern: {coinName}-up-or-down-{month}-{day}-{year}-{hour}{ampm}-et
+     * Example: bitcoin-up-or-down-march-15-2026-9am-et
+     */
+    const generate1hSlug = (coinShort: string, slotStartSeconds: number): string => {
+      const fullName = coinFullNames[coinShort] ?? coinShort;
+      const date = new Date(slotStartSeconds * 1000);
+
+      // Convert to ET using Intl.DateTimeFormat
+      const etParts = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+        hour: 'numeric',
+        hour12: true,
+      }).formatToParts(date);
+
+      const getPart = (type: string) => etParts.find((p) => p.type === type)?.value ?? '';
+      const month = parseInt(getPart('month'), 10);
+      const day = parseInt(getPart('day'), 10);
+      const year = getPart('year');
+      const hour = parseInt(getPart('hour'), 10);
+      const dayPeriod = getPart('dayPeriod').toLowerCase(); // am/pm
+
+      const monthName = monthNames[month - 1];
+      const hourStr = `${hour}${dayPeriod}`;
+
+      return `${fullName}-up-or-down-${monthName}-${day}-${year}-${hourStr}-et`;
+    };
+
     // Generate slugs for all combinations
     const slugsToFetch: string[] = [];
 
     for (const dur of targetDurations) {
       const intervalSeconds = durationIntervals[dur];
-      const durationStr = dur.replace('m', 'm'); // 5m or 15m
 
       // Calculate the current slot and extend to cover the time range
       // The slug timestamp is the START time, endTime = startTime + interval
@@ -1490,7 +1537,13 @@ export class MarketService {
       // Generate slots from minSlotStart to maxSlotStart
       for (let slotStart = minSlotStart; slotStart <= maxSlotStart; slotStart += intervalSeconds) {
         for (const coinName of targetCoins) {
-          slugsToFetch.push(`${coinName}-updown-${durationStr}-${slotStart}`);
+          if (dur === '1h') {
+            // 1h uses human-readable slug: {coinName}-up-or-down-{month}-{day}-{year}-{hour}{ampm}-et
+            slugsToFetch.push(generate1hSlug(coinName, slotStart));
+          } else {
+            // 5m, 15m, 4h use timestamp slug: {coin}-updown-{duration}-{timestamp}
+            slugsToFetch.push(`${coinName}-updown-${dur}-${slotStart}`);
+          }
         }
       }
     }
