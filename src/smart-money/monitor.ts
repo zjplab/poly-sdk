@@ -169,8 +169,11 @@ export class TradeMonitor extends EventEmitter {
       side: activity.side,
       size: activity.size,
       price: activity.price,
+      // Activity.timestamp is Unix seconds; convert to ms for consistency
+      timestamp: typeof activity.timestamp === 'number' ? activity.timestamp * 1000 : detectedAt,
       source: 'polling',
       detectedAt,
+      marketSlug: (activity as any).marketSlug,
     };
   }
 
@@ -284,6 +287,8 @@ export class TradeMonitor extends EventEmitter {
         side: targetOrder.side === OrderSide.BUY ? 'BUY' : 'SELL',
         size,
         price,
+        // Mempool: trade not yet confirmed — use detection time as best approximation
+        timestamp: t0,
         source: 'mempool',
         detectedAt: t0,
       };

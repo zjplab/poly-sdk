@@ -293,52 +293,7 @@ export type {
   ScanResult,
 } from './services/arbitrage-service.js';
 
-// SmartMoneyService - Smart Money detection and Copy Trading
-export {
-  SmartMoneyService,
-  categorizeMarket,
-  CATEGORY_KEYWORDS,
-} from './services/smart-money-service.js';
-export type {
-  SmartMoneyWallet,
-  SmartMoneyTrade,
-  AutoCopyTradingOptions,
-  AutoCopyTradingStats,
-  AutoCopyTradingSubscription,
-  SmartMoneyServiceConfig,
-  // Leaderboard & Report types
-  LeaderboardOptions,
-  SmartMoneyLeaderboardEntry,
-  SmartMoneyLeaderboardResult,
-  PeriodRanking,
-  WalletReport,
-  WalletComparison,
-  // Report types (02-smart-money)
-  MarketCategory,
-  DailySummary,
-  CategoryStats,
-  TradeRecord,
-  PositionSummary,
-  ClosedMarketSummary,
-  DailyWalletReport,
-  DataRange,
-  PerformanceMetrics,
-  MarketStats,
-  TradingPatterns,
-  CurrentPositionsSummary,
-  WalletLifecycleReport,
-  PieSlice,
-  PieChartData,
-  BarItem,
-  BarChartData,
-  MonthlyPnLItem,
-  MonthlyPnLData,
-  ChartMetadata,
-  WalletChartData,
-  ReportProgressCallback,
-  LifecycleReportOptions,
-  TextReport,
-} from './services/smart-money-service.js';
+// smart-money V2 — all exports from modular smart-money/ directory (clean break)
 
 // smart-money V2 modules (modularized, branch: copy-trading)
 export { PositionTracker, CopyEngine } from './smart-money/copy.js';
@@ -626,7 +581,7 @@ import { WalletService } from './services/wallet-service.js';
 import { MarketService } from './services/market-service.js';
 import { TradingService } from './services/trading-service.js';
 import { RealtimeServiceV2 } from './services/realtime-service-v2.js';
-import { SmartMoneyService } from './services/smart-money-service.js';
+import { SmartMoneyCore } from './smart-money/core.js';
 import { BinanceService } from './services/binance-service.js';
 import { DipArbService } from './services/dip-arb-service.js';
 import { EventService } from './services/event-service.js';
@@ -652,7 +607,8 @@ export class PolymarketSDK {
   public readonly markets: MarketService;
   public readonly events: EventService;
   public readonly realtime: RealtimeServiceV2;
-  public readonly smartMoney: SmartMoneyService;
+  /** V2: SmartMoneyCore for leaderboard + wallet info. Use TradeMonitor/CopyEngine/PositionTracker directly for copy-trading. */
+  public readonly smartMoneyCore: SmartMoneyCore;
   public readonly binance: BinanceService;
   public readonly dipArb: DipArbService;
 
@@ -689,16 +645,7 @@ export class PolymarketSDK {
     this.markets = new MarketService(this.gammaApi, this.dataApi, this.rateLimiter, this.cache, undefined, this.binance);
     this.events = new EventService(this.rateLimiter, this.cache);
     this.realtime = new RealtimeServiceV2();
-    this.smartMoney = new SmartMoneyService(
-      this.wallets,
-      this.realtime,
-      this.tradingService,
-      this.dataApi,  // DataApiClient (required)
-      {
-        mempoolWssUrl: config.mempoolWssUrl,
-        debug: config.smartMoneyDebug ?? config.debug ?? false,
-      },
-    );
+    this.smartMoneyCore = new SmartMoneyCore(this.wallets);
 
     // Initialize DipArbService
     this.dipArb = new DipArbService(
@@ -796,7 +743,6 @@ export class PolymarketSDK {
    */
   stop(): void {
     this.dipArb.stop();
-    this.smartMoney.disconnect();
     this.realtime.disconnect();
   }
 

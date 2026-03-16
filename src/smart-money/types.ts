@@ -697,8 +697,12 @@ export interface TradeEvent {
   side: 'BUY' | 'SELL';
   size: number;
   price: number;
+  /** Unix ms — when the actual trade occurred (from activity API). Used for latency tracking. */
+  timestamp: number;
   source: 'polling' | 'mempool';
   detectedAt: number;
+  /** Market slug / title, if available (from polling). */
+  marketSlug?: string;
 }
 
 /**
