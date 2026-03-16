@@ -340,6 +340,18 @@ export type {
   TextReport,
 } from './services/smart-money-service.js';
 
+// smart-money V2 modules (modularized, branch: copy-trading)
+export { PositionTracker, CopyEngine } from './smart-money/copy.js';
+export { TradeMonitor } from './smart-money/monitor.js';
+export { SmartMoneyCore } from './smart-money/core.js';
+export { WalletReports } from './smart-money/reports.js';
+export type {
+  PositionDiff,
+  OrderRequest,
+  TradeEvent,
+  MonitorOptions,
+} from './smart-money/types.js';
+
 // DipArbService - Dip Arbitrage for 15m/5m UP/DOWN markets
 export { DipArbService } from './services/dip-arb-service.js';
 export type {
