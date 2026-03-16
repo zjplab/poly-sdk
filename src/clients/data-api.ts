@@ -78,6 +78,7 @@ export interface Activity {
   // Market metadata (from API)
   title?: string;
   slug?: string;
+  eventSlug?: string;  // Event-level slug (for multi-outcome market grouping)
 
   // Trader info (from API - returned as "name")
   name?: string;
@@ -1078,6 +1079,7 @@ export class DataApiClient {
         // Market metadata
         title: a.title !== undefined ? String(a.title) : undefined,
         slug: a.slug !== undefined ? String(a.slug) : undefined,
+        eventSlug: a.eventSlug !== undefined ? String(a.eventSlug) : undefined,
 
         // Trader info
         name: a.name !== undefined ? String(a.name) : undefined,
