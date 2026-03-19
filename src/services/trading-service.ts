@@ -520,10 +520,12 @@ export class TradingService {
           orderType
         );
 
+        // Per CLOB API docs: orderID is always returned on successful 200 responses.
+        // transactionsHashes alone is NOT a standalone success signal — it co-occurs with orderID
+        // when status="matched". Removing the transactionHashes-only fallback prevents ghost positions
+        // (success=true, orderId=undefined) when Builder/Relayer path returns txHash without orderID.
         const success = result.success === true ||
-          (result.success !== false &&
-            ((result.orderID !== undefined && result.orderID !== '') ||
-              (result.transactionsHashes !== undefined && result.transactionsHashes.length > 0)));
+          (result.success !== false && result.orderID !== undefined && result.orderID !== '');
 
         const errorMsg = !success
           ? (result.errorMsg || `Limit order rejected (status: ${result.status ?? 'unknown'}, response: ${JSON.stringify(result)})`)
@@ -588,10 +590,10 @@ export class TradingService {
         // accepted but not filled. Only trust explicit success=true.
         // For non-FOK orders, having an orderID or transaction hash also indicates success.
         const isFokOrder = params.orderType !== 'FAK'; // default is FOK
+        // FOK: only trust explicit success=true (orderID alone means accepted-but-killed for FOK).
+        // FAK: orderID presence indicates success; transactionHashes alone is NOT a success signal.
         const success = result.success === true ||
-          (!isFokOrder && result.success !== false &&
-            ((result.orderID !== undefined && result.orderID !== '') ||
-              (result.transactionsHashes !== undefined && result.transactionsHashes.length > 0)));
+          (!isFokOrder && result.success !== false && result.orderID !== undefined && result.orderID !== '');
 
         const errorMsg = !success
           ? (result.errorMsg || `Market order ${isFokOrder ? 'FOK not filled' : 'rejected'} (status: ${result.status ?? 'unknown'}, orderID: ${result.orderID ?? 'none'})`)

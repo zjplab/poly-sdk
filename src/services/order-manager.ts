@@ -1389,12 +1389,18 @@ export class OrderManager extends EventEmitter {
     this.processedEvents.add(eventKey);
 
     // Emit fill event
-    // Calculate remaining size after this fill
-    const remainingAfterFill = watched.order.originalSize - (watched.order.filledSize + fillSize);
-    // Complete fill if: sum >= originalSize OR remaining is zero/negative
+    // Calculate remaining size after this fill.
+    // IMPORTANT: update filledSize BEFORE computing isCompleteFill so that successive
+    // USER_TRADE events (arriving before USER_ORDER UPDATE) see the correct cumulative total.
+    // Previously filledSize was only updated in handleUserOrder, causing rapid partial fills
+    // to all use filledSize=0 and potentially misclassify the last partial as non-complete.
+    watched.order.filledSize += fillSize;
+
+    const remainingAfterFill = watched.order.originalSize - watched.order.filledSize;
+    // Complete fill if: cumulative >= originalSize OR remaining is zero/negative
     // Note: For market orders (FOK/FAK), originalSize is in USDC but filledSize is in shares,
     // causing remainingAfterFill to be negative. This is still a complete fill.
-    const isCompleteFill = watched.order.filledSize + fillSize >= watched.order.originalSize ||
+    const isCompleteFill = watched.order.filledSize >= watched.order.originalSize ||
       remainingAfterFill <= 0;
 
     const fillEvent: FillEvent = {
@@ -1408,8 +1414,8 @@ export class OrderManager extends EventEmitter {
         timestamp: userTrade.timestamp,
         transactionHash: userTrade.transactionHash,
       },
-      cumulativeFilled: watched.order.filledSize + fillSize,
-      remainingSize: watched.order.originalSize - (watched.order.filledSize + fillSize),
+      cumulativeFilled: watched.order.filledSize,
+      remainingSize: remainingAfterFill,
       isCompleteFill,
     };
 
