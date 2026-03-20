@@ -589,7 +589,17 @@ export class OrderHandleImpl implements OrderHandle {
       this._status = 'cancelled';
       this._order = event.order;
       this.invokeHandlers('cancelled', event.order);
-      this.resolveTerminal('cancelled', 'Order cancelled');
+      // FAK race condition fix: USER_TRADE fill events may arrive slightly after
+      // the CANCELLATION event. If we have no fills yet, wait 500ms to allow any
+      // in-flight fill events to be processed before we call cleanup() and remove
+      // the fill listeners. If fills already exist we resolve immediately.
+      if (this._fills.length > 0) {
+        this.resolveTerminal('cancelled', 'Order cancelled');
+      } else {
+        setTimeout(() => {
+          this.resolveTerminal('cancelled', 'Order cancelled');
+        }, 500);
+      }
     };
 
     const onExpired = (event: ExpireEvent) => {
