@@ -174,6 +174,7 @@ export class TradeMonitor extends EventEmitter {
       source: 'polling',
       detectedAt,
       marketSlug: (activity as any).marketSlug,
+      transactionHash: activity.transactionHash ?? undefined,
     };
   }
 

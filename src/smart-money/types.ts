@@ -703,6 +703,12 @@ export interface TradeEvent {
   detectedAt: number;
   /** Market slug / title, if available (from polling). */
   marketSlug?: string;
+  /** 链上 tx hash，来自 Activity.transactionHash（polling 模式）。
+   *  用于 copy-trading 的 dedup（UNIQUE INDEX on copy_trades.source_tx_hash）。
+   *  position 模式（PositionDiff）无此字段，属预期行为——PositionDiff 通过
+   *  仓位快照 diff 检测变化，无对应的单笔 tx hash。
+   */
+  transactionHash?: string;
 }
 
 /**
