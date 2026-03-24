@@ -169,8 +169,9 @@ export class TradeMonitor extends EventEmitter {
       side: activity.side,
       size: activity.size,
       price: activity.price,
-      // Activity.timestamp is Unix seconds; convert to ms for consistency
-      timestamp: typeof activity.timestamp === 'number' ? activity.timestamp * 1000 : detectedAt,
+      // Activity.timestamp is already normalized to Unix ms by DataApiClient.normalizeTimestamp().
+      // Do NOT multiply by 1000 again — that would produce year ~58197.
+      timestamp: typeof activity.timestamp === 'number' ? activity.timestamp : detectedAt,
       source: 'polling',
       detectedAt,
       marketSlug: (activity as any).marketSlug,
