@@ -223,6 +223,28 @@ console.log(`Open orders: ${openOrders.length}`);
 sdk.stop();
 ```
 
+### Email / Magic Login (funder account)
+
+```typescript
+import { PolymarketSDK } from '@catalyst-team/poly-sdk';
+
+const sdk = await PolymarketSDK.create({
+  privateKey: process.env.POLYMARKET_PRIVATE_KEY!, // Exported signer private key
+  signatureType: 1,                                // Magic / Email login
+  funderAddress: process.env.POLYMARKET_FUNDER!,   // Polymarket profile address shown in the UI
+});
+
+const order = await sdk.tradingService.createLimitOrder({
+  tokenId: yesTokenId,
+  side: 'BUY',
+  price: 0.45,
+  size: 10,
+  orderType: 'GTC',
+});
+
+sdk.stop();
+```
+
 ---
 
 ## Services Guide

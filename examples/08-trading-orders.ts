@@ -28,6 +28,8 @@ import {
 
 // Test wallet private key (empty wallet for safety)
 const PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY || '0xYOUR_PRIVATE_KEY_HERE';
+const SIGNATURE_TYPE = Number(process.env.POLYMARKET_SIGNATURE_TYPE || '0') as 0 | 1 | 2;
+const FUNDER_ADDRESS = process.env.POLYMARKET_FUNDER || '';
 
 async function main() {
   console.log('=== Polymarket Trading Examples (TradingService) ===\n');
@@ -38,6 +40,8 @@ async function main() {
   const cache = createUnifiedCache();
   const tradingService = new TradingService(rateLimiter, cache, {
     privateKey: PRIVATE_KEY,
+    signatureType: SIGNATURE_TYPE,
+    funderAddress: FUNDER_ADDRESS || undefined,
   });
 
   // ===== 1. Find an Active Market =====

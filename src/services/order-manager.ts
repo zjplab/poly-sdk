@@ -198,6 +198,10 @@ import { PolymarketError, ErrorCode } from '../core/errors.js';
 export interface OrderManagerConfig {
   /** Private key for signing transactions */
   privateKey: string;
+  /** Polymarket signature type. Use 1 for Magic / Email login. */
+  signatureType?: 0 | 1 | 2;
+  /** Polymarket profile / funder address. Required with signatureType 1. */
+  funderAddress?: string;
   /** Rate limiter for API calls */
   rateLimiter: RateLimiter;
   /** Cache for market metadata */
@@ -677,7 +681,8 @@ export class OrderManager extends EventEmitter {
   private polygonProvider: ethers.providers.Provider | null = null;
 
   // ========== Configuration ==========
-  private config: Required<Omit<OrderManagerConfig, 'builderCreds' | 'safeAddress'>> & Pick<OrderManagerConfig, 'builderCreds' | 'safeAddress'>;
+  private config: Required<Omit<OrderManagerConfig, 'signatureType' | 'funderAddress' | 'builderCreds' | 'safeAddress'>> &
+    Pick<OrderManagerConfig, 'signatureType' | 'funderAddress' | 'builderCreds' | 'safeAddress'>;
   private initialized = false;
 
   // ========== Monitoring State ==========
@@ -714,6 +719,8 @@ export class OrderManager extends EventEmitter {
       cache,
       {
         privateKey: config.privateKey,
+        signatureType: config.signatureType,
+        funderAddress: config.funderAddress,
         chainId: this.config.chainId,
         builderCreds: config.builderCreds,
         safeAddress: config.safeAddress,

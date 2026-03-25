@@ -52,6 +52,10 @@ export interface ArbitrageMarketConfig {
 export interface ArbitrageServiceConfig {
   /** Private key for trading (optional for monitor-only mode) */
   privateKey?: string;
+  /** Polymarket signature type. Use 1 for Magic / Email login. */
+  signatureType?: 0 | 1 | 2;
+  /** Polymarket profile / funder address. Required with signatureType 1. */
+  funderAddress?: string;
   /** RPC URL for CTF operations */
   rpcUrl?: string;
   /** Minimum profit threshold (default: 0.005 = 0.5%) */
@@ -253,8 +257,10 @@ export class ArbitrageService extends EventEmitter {
   private rateLimiter: RateLimiter;
 
   private market: ArbitrageMarketConfig | null = null;
-  private config: Omit<Required<ArbitrageServiceConfig>, 'privateKey' | 'rpcUrl' | 'rebalanceInterval'> & {
+  private config: Omit<Required<ArbitrageServiceConfig>, 'privateKey' | 'signatureType' | 'funderAddress' | 'rpcUrl' | 'rebalanceInterval'> & {
     privateKey?: string;
+    signatureType?: 0 | 1 | 2;
+    funderAddress?: string;
     rpcUrl?: string;
     rebalanceIntervalMs: number;
   };
@@ -296,6 +302,8 @@ export class ArbitrageService extends EventEmitter {
 
     this.config = {
       privateKey: config.privateKey,
+      signatureType: config.signatureType,
+      funderAddress: config.funderAddress,
       rpcUrl: config.rpcUrl || 'https://polygon-rpc.com',
       profitThreshold: config.profitThreshold ?? 0.005,
       minTradeSize: config.minTradeSize ?? 5,
@@ -331,6 +339,8 @@ export class ArbitrageService extends EventEmitter {
       this.tradingService = new TradingService(this.rateLimiter, cache, {
         privateKey: this.config.privateKey,
         chainId: 137,
+        signatureType: this.config.signatureType,
+        funderAddress: this.config.funderAddress,
       });
     }
 

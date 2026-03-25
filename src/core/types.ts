@@ -12,6 +12,14 @@ import type { CacheAdapter } from '@catalyst-team/cache';
 export type Side = 'BUY' | 'SELL';
 
 /**
+ * Polymarket signer mode used by the CLOB.
+ * - 0: Browser / EOA wallet
+ * - 1: Magic / Email login (requires profile/funder address)
+ * - 2: Polymarket Gnosis Safe / Builder mode
+ */
+export type PolymarketSignatureType = 0 | 1 | 2;
+
+/**
  * Order type for limit/market orders
  * - GTC: Good Till Cancelled (default for limit orders)
  * - GTD: Good Till Date (limit order with expiration)
@@ -249,6 +257,18 @@ export interface PolySDKOptions {
    * Private key for trading operations (hex string starting with 0x)
    */
   privateKey?: string;
+
+  /**
+   * Polymarket signature type.
+   * Use `1` for Magic / Email login exported private keys.
+   */
+  signatureType?: PolymarketSignatureType;
+
+  /**
+   * Polymarket profile / funder address.
+   * Required together with `signatureType: 1` for Magic / Email login.
+   */
+  funderAddress?: string;
 
   /**
    * API credentials for trading

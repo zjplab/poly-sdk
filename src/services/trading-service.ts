@@ -29,6 +29,7 @@ import {
 
 // SignatureType from @polymarket/order-utils (transitive dep, not directly importable)
 // Values: EOA = 0, POLY_PROXY = 1, POLY_GNOSIS_SAFE = 2
+const SIGNATURE_TYPE_POLY_PROXY = 1;
 const SIGNATURE_TYPE_POLY_GNOSIS_SAFE = 2;
 
 import { Wallet } from 'ethers';
@@ -36,7 +37,7 @@ import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError, ErrorCode } from '../core/errors.js';
-import type { Side, OrderType } from '../core/types.js';
+import type { Side, OrderType, PolymarketSignatureType } from '../core/types.js';
 import { OrderStatus } from '../core/types.js';
 import {
   mapApiStatusToInternal,
@@ -94,6 +95,10 @@ export interface TradingServiceConfig {
   privateKey: string;
   /** Chain ID (default: Polygon mainnet 137) */
   chainId?: number;
+  /** Polymarket signature type. Use 1 for Magic / Email login. */
+  signatureType?: PolymarketSignatureType;
+  /** Polymarket profile / funder address. Required with signatureType 1. */
+  funderAddress?: string;
   /** Pre-generated API credentials (optional) */
   credentials?: ApiCredentials;
   /** Builder API credentials (optional) - enables Builder mode with fee sharing and rewards */
@@ -365,8 +370,28 @@ export class TradingService {
       });
     }
 
+    if (this.config.signatureType === SIGNATURE_TYPE_POLY_PROXY && !this.config.funderAddress) {
+      throw new PolymarketError(
+        ErrorCode.INVALID_CONFIG,
+        'signatureType 1 (Magic / Email login) requires funderAddress (your Polymarket profile address).'
+      );
+    }
+
+    if (this.config.funderAddress && this.config.signatureType !== SIGNATURE_TYPE_POLY_PROXY) {
+      throw new PolymarketError(
+        ErrorCode.INVALID_CONFIG,
+        'funderAddress is only supported with signatureType 1 (Magic / Email login).'
+      );
+    }
+
     // Builder mode: orders use Safe as maker, signed by EOA owner
     const isBuilderMode = !!this.config.builderCreds && !!this.config.safeAddress;
+    const signatureType = isBuilderMode
+      ? SIGNATURE_TYPE_POLY_GNOSIS_SAFE
+      : this.config.signatureType;
+    const funderAddress = isBuilderMode
+      ? this.config.safeAddress
+      : this.config.funderAddress;
 
     // Re-initialize with L2 auth (credentials) and optional BuilderConfig
     this.clobClient = new ClobClient(
@@ -378,8 +403,8 @@ export class TradingService {
         secret: this.credentials.secret,
         passphrase: this.credentials.passphrase,
       },
-      isBuilderMode ? SIGNATURE_TYPE_POLY_GNOSIS_SAFE : undefined, // signatureType
-      isBuilderMode ? this.config.safeAddress : undefined,         // funderAddress (Safe holds the tokens)
+      signatureType, // signatureType
+      funderAddress, // funderAddress (profile address for Magic login, Safe for Builder mode)
       undefined, // geoBlockToken
       undefined, // useServerTime
       builderConfig, // BuilderConfig (arg 9)

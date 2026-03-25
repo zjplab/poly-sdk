@@ -16,8 +16,12 @@
   },
   "scripts": {
     "build": "tsc",
+    "prepare": "node scripts/setup-git-hooks.mjs",
     "prepublishOnly": "pnpm run build",
     "dev": "tsc --watch",
+    "hooks:install": "node scripts/setup-git-hooks.mjs",
+    "secrets:check": "node scripts/check-secrets.mjs",
+    "secrets:check:staged": "node scripts/check-secrets.mjs --staged",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",

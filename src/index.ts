@@ -653,6 +653,8 @@ export class PolymarketSDK {
     this.tradingService = new TradingService(this.rateLimiter, this.cache, {
       privateKey,
       chainId: config.chainId,
+      signatureType: config.signatureType,
+      funderAddress: config.funderAddress,
       credentials: config.creds,
       builderCreds: config.builderCreds,
       safeAddress: config.safeAddress,

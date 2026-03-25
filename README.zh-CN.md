@@ -215,6 +215,28 @@ console.log(`未成交订单: ${openOrders.length}`);
 sdk.stop();
 ```
 
+### Email / Magic 登录（funder account）
+
+```typescript
+import { PolymarketSDK } from '@catalyst-team/poly-sdk';
+
+const sdk = await PolymarketSDK.create({
+  privateKey: process.env.POLYMARKET_PRIVATE_KEY!, // 导出的 signer 私钥
+  signatureType: 1,                                // Magic / Email 登录
+  funderAddress: process.env.POLYMARKET_FUNDER!,   // Polymarket 页面显示的 profile address
+});
+
+const order = await sdk.tradingService.createLimitOrder({
+  tokenId: yesTokenId,
+  side: 'BUY',
+  price: 0.45,
+  size: 10,
+  orderType: 'GTC',
+});
+
+sdk.stop();
+```
+
 ---
 
 ## 服务指南
