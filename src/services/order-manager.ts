@@ -1675,10 +1675,10 @@ export class OrderManager extends EventEmitter {
         this.emit('transaction_confirmed', settlementEvent);
       }
     } catch (error) {
-      this.emit(
-        'error',
-        new Error(`Settlement tracking failed for ${transactionHash}: ${error}`)
-      );
+      // Log as warning instead of emitting 'error' event — settlement tracking
+      // failure is non-fatal (transient RPC outage). Emitting 'error' without a
+      // registered listener causes an unhandled rejection that crashes the process.
+      log.warn(`Settlement tracking failed for ${transactionHash}: ${error}`);
     }
   }
 
