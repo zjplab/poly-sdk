@@ -49,9 +49,9 @@
 import { EventEmitter } from 'events';
 import { ethers, Contract } from 'ethers';
 import { CTFClient, CTF_CONTRACT, type SplitResult, type MergeResult, type RedeemResult } from '../clients/ctf-client.js';
-import { createLogger } from '@earning-engine/logger';
+import { createModuleLogger } from '../core/logger.js';
 
-const log = createLogger('ctf-manager');
+const log = createModuleLogger('ctf-manager');
 
 // ============================================================================
 // Configuration & Types
@@ -427,7 +427,7 @@ export class CTFManager extends EventEmitter {
         await this.detectMergeOrRedeem(tokenId, amount, event.transactionHash!, event.blockNumber, timestamp);
       }
     } catch (error) {
-      log.error('[CTFManager] Error handling TransferSingle:', error);
+      log.error('[CTFManager] Error handling TransferSingle:', { error });
       this.emit('error', error);
     }
   }
@@ -512,7 +512,7 @@ export class CTFManager extends EventEmitter {
       this.emit('split_detected', splitEvent);
       this.emit('operation_detected', splitEvent);
     } catch (error) {
-      log.error('[CTFManager] Error handling PositionSplit:', error);
+      log.error('[CTFManager] Error handling PositionSplit:', { error });
       this.emit('error', error);
     }
   }
@@ -575,7 +575,7 @@ export class CTFManager extends EventEmitter {
       this.emit('merge_detected', mergeEvent);
       this.emit('operation_detected', mergeEvent);
     } catch (error) {
-      log.error('[CTFManager] Error handling PositionsMerge:', error);
+      log.error('[CTFManager] Error handling PositionsMerge:', { error });
       this.emit('error', error);
     }
   }
@@ -645,7 +645,7 @@ export class CTFManager extends EventEmitter {
       this.emit('redeem_detected', redeemEvent);
       this.emit('operation_detected', redeemEvent);
     } catch (error) {
-      log.error('[CTFManager] Error handling PayoutRedemption:', error);
+      log.error('[CTFManager] Error handling PayoutRedemption:', { error });
       this.emit('error', error);
     }
   }

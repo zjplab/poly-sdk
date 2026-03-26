@@ -7,9 +7,9 @@ import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError } from '../core/errors.js';
-import { createLogger } from '@earning-engine/logger';
+import { createModuleLogger } from '../core/logger.js';
 
-const log = createLogger('data-api');
+const log = createModuleLogger('data-api');
 
 const DATA_API_BASE = 'https://data-api.polymarket.com';
 

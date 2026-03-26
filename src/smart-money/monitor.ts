@@ -9,9 +9,7 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import type { DataApiClient, Activity } from '../clients/data-api.js';
 import type { TradeEvent, MonitorOptions } from './types.js';
-import { createLogger } from '@earning-engine/logger';
-
-const log = createLogger('sm-monitor');
+import { createModuleLogger } from '../core/logger.js';
 import {
   ROUTER_ADDRESSES,
   MATCH_ORDERS_SELECTOR,
@@ -19,6 +17,8 @@ import {
   extractTraderAddresses,
   OrderSide,
 } from '../utils/calldata-decoder.js';
+
+const log = createModuleLogger('sm-monitor');
 
 export type { TradeEvent, MonitorOptions };
 
@@ -211,7 +211,7 @@ export class TradeMonitor extends EventEmitter {
     });
 
     ws.on('error', (err: Error) => {
-      log.warn('[TradeMonitor] Mempool WSS error:', err.message);
+      log.warn('[TradeMonitor] Mempool WSS error:', { message: err.message });
     });
 
     ws.on('close', () => {

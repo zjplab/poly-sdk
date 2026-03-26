@@ -190,9 +190,9 @@ import type { UnifiedCache } from '../core/unified-cache.js';
 import { OrderStatus, type Side } from '../core/types.js';
 import { mapApiStatusToInternal, isTerminalStatus, isValidStatusTransition } from '../core/order-status.js';
 import { PolymarketError, ErrorCode } from '../core/errors.js';
-import { createLogger } from '@earning-engine/logger';
+import { createModuleLogger } from '../core/logger.js';
 
-const log = createLogger('order-manager');
+const log = createModuleLogger('order-manager');
 
 // ============================================================================
 // Configuration & Types
@@ -1321,10 +1321,9 @@ export class OrderManager extends EventEmitter {
    */
   private async handleUserTrade(userTrade: UserTrade): Promise<void> {
     // Debug: Log all incoming USER_TRADE events
-    console.log(`[OrderManager] WebSocket USER_TRADE received:`, {
+    log.info(`WebSocket USER_TRADE received`, {
       tradeId: userTrade.tradeId,
       takerOrderId: userTrade.takerOrderId,
-      makerOrderIds: userTrade.makerOrders?.map(m => m.orderId),
       size: userTrade.size,
       price: userTrade.price,
       status: userTrade.status,

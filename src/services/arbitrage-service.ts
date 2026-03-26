@@ -32,9 +32,9 @@ import { GammaApiClient } from '../clients/gamma-api.js';
 import { RateLimiter } from '../core/rate-limiter.js';
 import { createUnifiedCache } from '../core/unified-cache.js';
 import { getEffectivePrices } from '../utils/price-utils.js';
-import { createLogger } from '@earning-engine/logger';
+import { createModuleLogger } from '../core/logger.js';
 
-const log = createLogger('arbitrage');
+const log = createModuleLogger('arbitrage');
 import type { BookUpdate } from '../core/types.js';
 
 // ===== Types =====

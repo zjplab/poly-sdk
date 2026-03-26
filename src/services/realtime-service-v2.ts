@@ -23,9 +23,9 @@ import {
   WS_ENDPOINTS,
 } from '../realtime/index.js';
 import type { PriceUpdate, BookUpdate, Orderbook, OrderbookLevel } from '../core/types.js';
-import { createLogger } from '@earning-engine/logger';
+import { createModuleLogger } from '../core/logger.js';
 
-const log = createLogger('realtime-v2');
+const log = createModuleLogger('realtime-v2');
 
 // ============================================================================
 // Types

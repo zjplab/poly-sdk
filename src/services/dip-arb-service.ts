@@ -72,9 +72,9 @@ import {
   parseDurationFromSlug,
   isDipArbLeg1Signal,
 } from './dip-arb-types.js';
-import { createLogger } from '@earning-engine/logger';
+import { createModuleLogger } from '../core/logger.js';
 
-const log = createLogger('dip-arb');
+const log = createModuleLogger('dip-arb');
 
 // ===== DipArbService =====
 
