@@ -9,6 +9,9 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import type { DataApiClient, Activity } from '../clients/data-api.js';
 import type { TradeEvent, MonitorOptions } from './types.js';
+import { createLogger } from '@earning-engine/logger';
+
+const log = createLogger('sm-monitor');
 import {
   ROUTER_ADDRESSES,
   MATCH_ORDERS_SELECTOR,
@@ -186,7 +189,7 @@ export class TradeMonitor extends EventEmitter {
   private startMempool(): void {
     const url = this.opts.mempoolWssUrl;
     if (!url) {
-      console.warn('[TradeMonitor] Mempool WSS URL not configured, skipping');
+      log.warn('[TradeMonitor] Mempool WSS URL not configured, skipping');
       return;
     }
     if (this.mempoolWs) return;
@@ -208,11 +211,11 @@ export class TradeMonitor extends EventEmitter {
     });
 
     ws.on('error', (err: Error) => {
-      console.warn('[TradeMonitor] Mempool WSS error:', err.message);
+      log.warn('[TradeMonitor] Mempool WSS error:', err.message);
     });
 
     ws.on('close', () => {
-      console.warn('[TradeMonitor] Mempool WSS closed');
+      log.warn('[TradeMonitor] Mempool WSS closed');
       this.mempoolWs = null;
     });
   }
@@ -235,7 +238,7 @@ export class TradeMonitor extends EventEmitter {
       this.mempoolMsgCount++;
 
       if (t0 - this.mempoolLastStatLog > 60_000) {
-        console.log('[TradeMonitor] Mempool stats', {
+        log.debug('[TradeMonitor] Mempool stats', {
           totalMsgs: this.mempoolMsgCount,
           targets: this.mempoolTargets.size,
         });

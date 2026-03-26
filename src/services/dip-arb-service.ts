@@ -72,6 +72,9 @@ import {
   parseDurationFromSlug,
   isDipArbLeg1Signal,
 } from './dip-arb-types.js';
+import { createLogger } from '@earning-engine/logger';
+
+const log = createLogger('dip-arb');
 
 // ===== DipArbService =====
 
@@ -349,12 +352,12 @@ export class DipArbService extends EventEmitter {
     // Subscribe to Chainlink prices for the underlying asset
     // Format: ETH -> ETH/USD
     const chainlinkSymbol = `${market.underlying}/USD`;
-    console.log(`[DipArb] Subscribing to Chainlink prices: ${chainlinkSymbol}`);
+    log.info(`[DipArb] Subscribing to Chainlink prices: ${chainlinkSymbol}`);
     this.chainlinkSubscription = this.realtimeService.subscribeCryptoChainlinkPrices(
       [chainlinkSymbol],
       {
         onPrice: (price: CryptoPrice) => {
-          console.log(`[DipArb] Chainlink price received: ${price.symbol} = $${price.price}`);
+          log.info(`[DipArb] Chainlink price received: ${price.symbol} = $${price.price}`);
           this.handleChainlinkPriceUpdate(price);
         },
       }
@@ -995,7 +998,7 @@ export class DipArbService extends EventEmitter {
       if (new Date() >= this.market.endTime) {
         // Always log market end (not just in debug mode)
         if (!this.currentRound) {
-          console.log('[DipArb] Market has ended before round could start');
+          log.info('[DipArb] Market has ended before round could start');
         }
         return;
       }
@@ -2216,7 +2219,7 @@ export class DipArbService extends EventEmitter {
     if (this.config.logHandler) {
       this.config.logHandler(formatted);
     } else {
-      console.log(formatted);
+      log.info(formatted);
     }
   }
 }

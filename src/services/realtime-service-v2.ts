@@ -23,6 +23,9 @@ import {
   WS_ENDPOINTS,
 } from '../realtime/index.js';
 import type { PriceUpdate, BookUpdate, Orderbook, OrderbookLevel } from '../core/types.js';
+import { createLogger } from '@earning-engine/logger';
+
+const log = createLogger('realtime-v2');
 
 // ============================================================================
 // Types
@@ -1741,8 +1744,8 @@ export class RealtimeServiceV2 extends EventEmitter {
       // Use structured logger if provided
       this.config.logger[level](message);
     } else {
-      // Fallback to console.log
-      console.log(`[RealtimeService] ${message}`);
+      // Fallback to structured logger
+      log.info(`[RealtimeService] ${message}`);
     }
   }
 

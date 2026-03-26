@@ -190,6 +190,9 @@ import type { UnifiedCache } from '../core/unified-cache.js';
 import { OrderStatus, type Side } from '../core/types.js';
 import { mapApiStatusToInternal, isTerminalStatus, isValidStatusTransition } from '../core/order-status.js';
 import { PolymarketError, ErrorCode } from '../core/errors.js';
+import { createLogger } from '@earning-engine/logger';
+
+const log = createLogger('order-manager');
 
 // ============================================================================
 // Configuration & Types
@@ -1243,16 +1246,16 @@ export class OrderManager extends EventEmitter {
     // Connect to WebSocket and wait for connection to be established
     // connect() is async and returns a Promise that resolves when connected
     if (this.realtimeService) {
-      console.log(`[OrderManager] Connecting to WebSocket...`);
+      log.info(`[OrderManager] Connecting to WebSocket...`);
       await this.realtimeService.connect();
-      console.log(`[OrderManager] WebSocket connected successfully`);
+      log.info(`[OrderManager] WebSocket connected successfully`);
     }
 
     // Subscribe to user events (requires credentials)
     // Now safe to subscribe since connection is established
     const credentials = this.tradingService.getCredentials();
     if (credentials && this.realtimeService) {
-      console.log(`[OrderManager] Subscribing to user events...`);
+      log.info(`[OrderManager] Subscribing to user events...`);
       // Map ApiCredentials (key) to ClobApiKeyCreds (apiKey) format
       const clobAuth = {
         apiKey: credentials.key,
@@ -1263,7 +1266,7 @@ export class OrderManager extends EventEmitter {
         onOrder: this.handleUserOrder.bind(this),
         onTrade: this.handleUserTrade.bind(this),
       });
-      console.log(`[OrderManager] User events subscription complete`);
+      log.info(`[OrderManager] User events subscription complete`);
     }
   }
 
@@ -1349,11 +1352,11 @@ export class OrderManager extends EventEmitter {
     }
 
     if (!watched) {
-      console.log(`[OrderManager] USER_TRADE not for any watched order, ignoring`);
+      log.debug(`[OrderManager] USER_TRADE not for any watched order, ignoring`);
       return;
     }
 
-    console.log(`[OrderManager] USER_TRADE matched watched order: ${watched.orderId}`);
+    log.debug(`[OrderManager] USER_TRADE matched watched order: ${watched.orderId}`);
 
     // Bug 16 Fix: When we're the maker, use maker-specific matchedAmount and price
     // userTrade.size is the TOTAL trade size (sum of all makers), not our individual fill
@@ -1364,7 +1367,7 @@ export class OrderManager extends EventEmitter {
 
     // Debug: Log raw values for verification
     if (makerInfo) {
-      console.log(`[OrderManager] Maker fill debug:`, {
+      log.debug(`[OrderManager] Maker fill debug:`, {
         rawMatchedAmount,
         makerOrdersLength: userTrade.makerOrders?.length,
         willApplyFallback: fillSize === 0 || fillSize === undefined,
@@ -1379,12 +1382,12 @@ export class OrderManager extends EventEmitter {
     // Fallback: if matchedAmount is 0/undefined and we're a maker, use trade size
     // This shouldn't happen now that we're reading the correct field, but kept as safety
     if (makerInfo && (fillSize === 0 || fillSize === undefined)) {
-      console.log(`[OrderManager] Fallback applied: using userTrade.size ${userTrade.size} instead of ${fillSize}`);
+      log.debug(`[OrderManager] Fallback applied: using userTrade.size ${userTrade.size} instead of ${fillSize}`);
       fillSize = userTrade.size;
     }
     const fillPrice = makerInfo?.price ?? userTrade.price;
 
-    console.log(`[OrderManager] USER_TRADE fill details:`, {
+    log.debug(`[OrderManager] USER_TRADE fill details:`, {
       isMaker: !!makerInfo,
       fillSize,
       fillPrice,

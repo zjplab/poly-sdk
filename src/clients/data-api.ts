@@ -7,6 +7,9 @@ import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError } from '../core/errors.js';
+import { createLogger } from '@earning-engine/logger';
+
+const log = createLogger('data-api');
 
 const DATA_API_BASE = 'https://data-api.polymarket.com';
 
@@ -622,7 +625,7 @@ export class DataApiClient {
 
     // Warn if we hit the API offset limit
     if (offset >= API_OFFSET_LIMIT && all.length >= API_OFFSET_LIMIT) {
-      console.warn(
+      log.warn(
         `[DataApiClient] Hit API offset limit (${API_OFFSET_LIMIT}). ` +
           'Use time filtering (start/end params) to access older activity data.'
       );

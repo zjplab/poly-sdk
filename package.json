@@ -53,6 +53,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@earning-engine/logger": "workspace:*",
     "@polymarket/clob-client": "^5.1.3",
     "@polymarket/builder-relayer-client": "^0.0.8",
     "@polymarket/builder-signing-sdk": "^0.0.8",

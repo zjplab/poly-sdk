@@ -32,6 +32,9 @@ import { GammaApiClient } from '../clients/gamma-api.js';
 import { RateLimiter } from '../core/rate-limiter.js';
 import { createUnifiedCache } from '../core/unified-cache.js';
 import { getEffectivePrices } from '../utils/price-utils.js';
+import { createLogger } from '@earning-engine/logger';
+
+const log = createLogger('arbitrage');
 import type { BookUpdate } from '../core/types.js';
 
 // ===== Types =====
@@ -1589,7 +1592,7 @@ export class ArbitrageService extends EventEmitter {
 
   private log(message: string): void {
     if (this.config.enableLogging) {
-      console.log(`[ArbitrageService] ${message}`);
+      log.info(`[ArbitrageService] ${message}`);
     }
   }
 
