@@ -9,6 +9,9 @@ import { EventEmitter } from 'events';
 import type { Position, DataApiClient } from '../clients/data-api.js';
 import type { TradingService, OrderResult } from '../services/trading-service.js';
 import type { PositionDiff, OrderRequest } from './types.js';
+import { createModuleLogger } from '../core/logger.js';
+
+const log = createModuleLogger('copy-engine');
 
 export type { PositionDiff, OrderRequest };
 
@@ -188,9 +191,7 @@ export class CopyEngine {
 
     // Business-level retry: FOK/FAK failed → try fallback order type once
     if (!result.success && retryFallback && retryCount > 0) {
-      console.log(
-        `[CopyEngine] ${effectiveOrderType} failed, falling back to ${retryFallback}: conditionId=${conditionId.slice(0, 12)}...`
-      );
+      log.info(`${effectiveOrderType} failed, falling back to ${retryFallback}`, { conditionId: conditionId.slice(0, 12) });
       if (retryFallback === 'GTC') {
         if (!price || price <= 0) {
           return { success: false, errorMsg: `GTC fallback requires a price (tokenId=${tokenId})` };

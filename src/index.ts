@@ -14,6 +14,9 @@ export { Cache, CACHE_TTL } from './core/cache.js';
 export { PolymarketError, ErrorCode, withRetry } from './core/errors.js';
 export * from './core/types.js';
 
+// Logger injection — call setLogger() once at app startup to route SDK logs
+export { setLogger, getLogger, type Logger } from './core/logger.js';
+
 // Order status utilities
 export {
   mapApiStatusToInternal,

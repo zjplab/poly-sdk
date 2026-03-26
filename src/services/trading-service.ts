@@ -36,6 +36,9 @@ import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError, ErrorCode } from '../core/errors.js';
+import { createModuleLogger } from '../core/logger.js';
+
+const log = createModuleLogger('trading-service');
 import type { Side, OrderType } from '../core/types.js';
 import { OrderStatus } from '../core/types.js';
 import {
@@ -821,7 +824,7 @@ export class TradingService {
 
         // Validate required fields to prevent runtime errors
         if (!order.side) {
-          console.warn(`[TradingService] Order ${orderId} missing side field, returning null`);
+          log.warn(`Order ${orderId} missing side field, returning null`);
           return null;
         }
 

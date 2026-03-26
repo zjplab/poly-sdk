@@ -7,6 +7,9 @@
 
 import type { OpenOrder } from '@polymarket/clob-client';
 import { OrderStatus } from './types.js';
+import { createModuleLogger } from './logger.js';
+
+const log = createModuleLogger('order-status');
 
 /**
  * ============================================================================
@@ -96,7 +99,7 @@ export function mapApiStatusToInternal(apiOrder: OpenOrder): OrderStatus {
   }
 
   // Unknown status - log warning and default to open
-  console.warn(`[OrderStatus] Unknown API status: ${apiStatus}, defaulting to OPEN`);
+  log.warn(`Unknown API status: ${apiStatus}, defaulting to OPEN`);
   return OrderStatus.OPEN;
 }
 

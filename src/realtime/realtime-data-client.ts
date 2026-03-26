@@ -29,6 +29,9 @@ import {
   ConnectionStatus,
   WS_ENDPOINTS,
 } from './types.js';
+import { createModuleLogger } from '../core/logger.js';
+
+const _sdkLog = createModuleLogger('realtime-client');
 
 // Default to market channel
 const DEFAULT_URL = WS_ENDPOINTS.MARKET;
@@ -907,8 +910,8 @@ export class RealTimeDataClient implements RealTimeDataClientInterface {
       // Use structured logger if provided
       this.config.logger[level](message);
     } else {
-      // Fallback to console.log
-      console.log(`[RealTimeDataClient] ${message}`);
+      // Fallback to module logger (no-op until setLogger() is called)
+      _sdkLog[level](message);
     }
   }
 }
