@@ -33,3 +33,6 @@ coverage/
 *.tsbuildinfo
 .mcp.json
 .test-creds.json
+
+# Keys
+*.pem
