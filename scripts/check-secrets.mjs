@@ -6,7 +6,13 @@ import { existsSync, readFileSync } from 'node:fs';
 
 const args = new Set(process.argv.slice(2));
 const stagedOnly = args.has('--staged');
+const pushMode = args.has('--push');
 const verbose = args.has('--verbose');
+const ZERO_SHA = '0000000000000000000000000000000000000000';
+
+if (Number(stagedOnly) + Number(pushMode) > 1) {
+  throw new Error('Use only one scan mode at a time: default repo scan, --staged, or --push.');
+}
 
 const BLOCKED_PATH_PATTERNS = [
   {
@@ -73,11 +79,7 @@ function runGit(argsList) {
   return result.stdout;
 }
 
-function getCandidatePaths() {
-  const stdout = stagedOnly
-    ? runGit(['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'])
-    : runGit(['ls-files', '-z']);
-
+function parseNullTerminatedPaths(stdout) {
   return stdout
     .split('\0')
     .map((item) => item.trim())
@@ -85,25 +87,37 @@ function getCandidatePaths() {
     .filter((filePath) => !filePath.startsWith('dist/'));
 }
 
-function readGitContent(filePath) {
-  if (stagedOnly) {
-    const result = spawnSync('git', ['show', `:${filePath}`], {
-      cwd: process.cwd(),
-      encoding: null,
-    });
+function getRepoCandidatePaths() {
+  return parseNullTerminatedPaths(runGit(['ls-files', '-z']));
+}
 
-    if (result.status !== 0) {
-      throw new Error(result.stderr?.toString('utf8').trim() || `git show :${filePath} failed`);
-    }
+function getStagedCandidatePaths() {
+  return parseNullTerminatedPaths(runGit(['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z']));
+}
 
-    return result.stdout;
+function readGitObject(objectSpec) {
+  const result = spawnSync('git', ['show', objectSpec], {
+    cwd: process.cwd(),
+    encoding: null,
+  });
+
+  if (result.status !== 0) {
+    throw new Error(result.stderr?.toString('utf8').trim() || `git show ${objectSpec} failed`);
   }
 
+  return result.stdout;
+}
+
+function readRepoContent(filePath) {
   if (!existsSync(filePath)) {
     return null;
   }
 
   return readFileSync(filePath);
+}
+
+function readStagedContent(filePath) {
+  return readGitObject(`:${filePath}`);
 }
 
 function isBinary(buffer) {
@@ -166,7 +180,7 @@ function scanPaths(paths) {
   const findings = [];
 
   for (const filePath of paths) {
-    if (!stagedOnly && !existsSync(filePath)) {
+    if (!stagedOnly && !pushMode && !existsSync(filePath)) {
       continue;
     }
 
@@ -181,7 +195,7 @@ function scanPaths(paths) {
       }
     }
 
-    const content = readGitContent(filePath);
+    const content = stagedOnly ? readStagedContent(filePath) : readRepoContent(filePath);
     if (content) {
       findings.push(...scanContent(filePath, Buffer.from(content)));
     }
@@ -190,13 +204,160 @@ function scanPaths(paths) {
   return findings;
 }
 
+function parsePushUpdates(stdinText) {
+  return stdinText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [localRef, localSha, remoteRef, remoteSha] = line.split(/\s+/);
+
+      if (!localRef || !localSha || !remoteRef || !remoteSha) {
+        throw new Error(`Unexpected pre-push input: ${line}`);
+      }
+
+      return { localRef, localSha, remoteRef, remoteSha };
+    });
+}
+
+function readStdin() {
+  return new Promise((resolve, reject) => {
+    if (process.stdin.isTTY) {
+      resolve('');
+      return;
+    }
+
+    let input = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      input += chunk;
+    });
+    process.stdin.on('end', () => resolve(input));
+    process.stdin.on('error', reject);
+  });
+}
+
+function getPushCommitShas(updates) {
+  const commitShas = new Set();
+
+  for (const update of updates) {
+    if (update.localSha === ZERO_SHA) {
+      continue;
+    }
+
+    let stdout = '';
+
+    if (update.remoteSha === ZERO_SHA) {
+      stdout = runGit(['rev-list', update.localSha, '--not', '--remotes']);
+
+      // New branches can still point at commits already reachable from another remote ref.
+      // In that case scan the tip commit rather than silently skipping the push.
+      if (!stdout.trim()) {
+        stdout = runGit(['rev-list', '--max-count=1', update.localSha]);
+      }
+    } else {
+      stdout = runGit(['rev-list', `${update.remoteSha}..${update.localSha}`]);
+    }
+
+    stdout
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach((sha) => commitShas.add(sha));
+  }
+
+  return [...commitShas];
+}
+
+function getCommitCandidatePaths(commitSha) {
+  return parseNullTerminatedPaths(
+    runGit(['diff-tree', '--root', '--no-commit-id', '--name-only', '-r', '--diff-filter=ACMR', '-z', commitSha])
+  );
+}
+
+function dedupeFindings(findings) {
+  const seen = new Set();
+  const uniqueFindings = [];
+
+  for (const finding of findings) {
+    const key = [finding.commitSha || '', finding.filePath, finding.lineNumber || '', finding.rule, finding.snippet].join(
+      '::'
+    );
+
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    uniqueFindings.push(finding);
+  }
+
+  return uniqueFindings;
+}
+
+function scanCommit(commitSha) {
+  const findings = [];
+  const paths = getCommitCandidatePaths(commitSha);
+
+  for (const filePath of paths) {
+    for (const rule of BLOCKED_PATH_PATTERNS) {
+      if (rule.regex.test(filePath)) {
+        findings.push({
+          commitSha,
+          filePath,
+          lineNumber: null,
+          rule: rule.name,
+          snippet: filePath,
+        });
+      }
+    }
+
+    const content = readGitObject(`${commitSha}:${filePath}`);
+    findings.push(
+      ...scanContent(filePath, Buffer.from(content)).map((finding) => ({
+        ...finding,
+        commitSha,
+      }))
+    );
+  }
+
+  return { findings, pathCount: paths.length };
+}
+
+async function scanPush() {
+  const stdinText = await readStdin();
+  const updates = parsePushUpdates(stdinText);
+  const commits = getPushCommitShas(updates);
+  const findings = [];
+  let pathCount = 0;
+
+  for (const commitSha of commits) {
+    const result = scanCommit(commitSha);
+    findings.push(...result.findings);
+    pathCount += result.pathCount;
+  }
+
+  return {
+    updates: updates.length,
+    commits: commits.length,
+    paths: pathCount,
+    findings: dedupeFindings(findings),
+  };
+}
+
 function printFindings(findings) {
   console.error('Secret scan failed. Remove sensitive data before committing/pushing.');
 
   for (const finding of findings) {
+    const locationParts = [];
+
+    if (finding.commitSha) {
+      locationParts.push(finding.commitSha.slice(0, 12));
+    }
+
+    locationParts.push(finding.filePath);
+
     const location = finding.lineNumber
-      ? `${finding.filePath}:${finding.lineNumber}`
-      : finding.filePath;
+      ? `${locationParts.join(':')}:${finding.lineNumber}`
+      : locationParts.join(':');
     console.error(`- ${location}  [${finding.rule}]`);
     console.error(`  ${finding.snippet}`);
   }
@@ -205,8 +366,29 @@ function printFindings(findings) {
   console.error('If a value is intentionally fake, replace it with a clear placeholder like YOUR_API_KEY_HERE.');
 }
 
-function main() {
-  const paths = getCandidatePaths();
+async function main() {
+  if (pushMode) {
+    const result = await scanPush();
+
+    if (verbose) {
+      console.log(
+        `Scanning ${result.commits} outgoing commit(s) across ${result.paths} changed file(s) from ${result.updates} push update(s)...`
+      );
+    }
+
+    if (result.findings.length > 0) {
+      printFindings(result.findings);
+      process.exit(1);
+    }
+
+    if (verbose) {
+      console.log('Secret scan passed.');
+    }
+
+    return;
+  }
+
+  const paths = stagedOnly ? getStagedCandidatePaths() : getRepoCandidatePaths();
 
   if (verbose) {
     console.log(`Scanning ${paths.length} file(s) ${stagedOnly ? 'from the index' : 'from HEAD/worktree'}...`);
@@ -224,4 +406,4 @@ function main() {
   }
 }
 
-main();
+await main();
