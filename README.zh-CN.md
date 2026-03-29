@@ -169,9 +169,13 @@ const sdk = new PolymarketSDK();
 
 // 通过 slug 或 condition ID 获取市场
 const market = await sdk.getMarket('will-trump-win-2024');
+const binary = getBinaryTokens(market.tokens);
+if (!binary) throw new Error('Expected binary market');
+const yesToken = binary.primary;
+const noToken = binary.secondary;
 console.log(`${market.question}`);
-console.log(`YES: ${market.tokens.find(t => t.outcome === 'Yes')?.price}`);
-console.log(`NO: ${market.tokens.find(t => t.outcome === 'No')?.price}`);
+console.log(`YES (${yesToken.outcome}): ${yesToken.price}`);
+console.log(`NO (${noToken.outcome}): ${noToken.price}`);
 
 // 获取处理后的订单簿（含分析数据）
 const orderbook = await sdk.getOrderbook(market.conditionId);
@@ -218,7 +222,7 @@ sdk.stop();
 ### Email / Magic 登录（funder account）
 
 ```typescript
-import { PolymarketSDK } from '@catalyst-team/poly-sdk';
+import { PolymarketSDK, getBinaryTokens } from '@catalyst-team/poly-sdk';
 
 const sdk = await PolymarketSDK.create({
   privateKey: process.env.POLYMARKET_PRIVATE_KEY!, // 导出的 signer 私钥
@@ -706,8 +710,9 @@ const noPrice = market.tokens.no.price;
 **之后 (v0.3.0)**:
 ```typescript
 // MarketToken 对象数组
-const yesToken = market.tokens.find(t => t.outcome === 'Yes');
-const noToken = market.tokens.find(t => t.outcome === 'No');
+const binary = getBinaryTokens(market.tokens);
+const yesToken = binary?.primary;
+const noToken = binary?.secondary;
 
 const yesPrice = yesToken?.price;
 const noPrice = noToken?.price;
@@ -717,13 +722,13 @@ const noPrice = noToken?.price;
 
 ```typescript
 // 迁移辅助函数
-function getTokenPrice(market: UnifiedMarket, outcome: 'Yes' | 'No'): number {
-  return market.tokens.find(t => t.outcome === outcome)?.price ?? 0;
+function getTokenPrice(market: UnifiedMarket, side: 'yes' | 'no'): number {
+  return market.tokens[side === 'yes' ? 0 : 1]?.price ?? 0;
 }
 
 // 使用
-const yesPrice = getTokenPrice(market, 'Yes');
-const noPrice = getTokenPrice(market, 'No');
+const yesPrice = getTokenPrice(market, 'yes');
+const noPrice = getTokenPrice(market, 'no');
 ```
 
 **为什么改变？** 数组格式更好地支持多结果市场，并且与 Polymarket API 响应格式更一致。

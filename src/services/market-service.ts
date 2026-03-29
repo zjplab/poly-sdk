@@ -292,7 +292,7 @@ export class MarketService {
   async resolveMarketTokens(conditionId: string): Promise<ResolvedMarketTokens | null> {
     try {
       const market = await this.getClobMarket(conditionId);
-      if (!market?.tokens?.length || market.tokens.length < 2) {
+      if (!market?.tokens?.length || market.tokens.length !== 2) {
         return null;
       }
 
@@ -412,6 +412,13 @@ export class MarketService {
     if (!market) {
       throw new PolymarketError(ErrorCode.MARKET_NOT_FOUND, `Market not found: ${conditionId}`);
     }
+    if (market.tokens.length !== 2) {
+      throw new PolymarketError(
+        ErrorCode.INVALID_RESPONSE,
+        `Market ${conditionId} is not binary (found ${market.tokens.length} outcomes)`
+      );
+    }
+
     // Use index-based access instead of name-based (supports Yes/No, Up/Down, Team1/Team2, etc.)
     const yesToken = market.tokens[0];  // primary outcome
     const noToken = market.tokens[1];   // secondary outcome

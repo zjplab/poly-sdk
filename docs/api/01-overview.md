@@ -659,8 +659,10 @@ import type { TokenIds } from '@catalyst-team/poly-sdk';
 
 // Get token IDs from CLOB API
 const market = await clobApi.getMarket('0xabc123...');
-const yesToken = market.tokens.find(t => t.outcome === 'Yes');
-const noToken = market.tokens.find(t => t.outcome === 'No');
+const [yesToken, noToken] = market.tokens;
+if (!yesToken || !noToken || market.tokens.length !== 2) {
+  throw new Error('Expected binary market');
+}
 
 const tokenIds: TokenIds = {
   yesTokenId: yesToken.tokenId,
@@ -825,9 +827,13 @@ const clobApi = new ClobApiClient(rateLimiter, cache);
 
 // 1. Get market and token IDs
 const market = await clobApi.getMarket(conditionId);
+const [yesToken, noToken] = market.tokens;
+if (!yesToken || !noToken || market.tokens.length !== 2) {
+  throw new Error('Expected binary market');
+}
 const tokenIds: TokenIds = {
-  yesTokenId: market.tokens.find(t => t.outcome === 'Yes').tokenId,
-  noTokenId: market.tokens.find(t => t.outcome === 'No').tokenId,
+  yesTokenId: yesToken.tokenId,
+  noTokenId: noToken.tokenId,
 };
 
 // 2. Get processed orderbook

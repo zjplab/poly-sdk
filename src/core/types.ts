@@ -573,12 +573,12 @@ export interface BookUpdate {
 // ===== Market Types =====
 
 /**
- * Token in a market (YES or NO outcome)
+ * Token in a market
  */
 export interface MarketToken {
   /** ERC-1155 token ID */
   tokenId: string;
-  /** Outcome name (e.g., "Yes", "No") */
+  /** Outcome name (e.g., "Yes", "No", "Up", "Down") */
   outcome: string;
   /** Current price (0-1) */
   price: number;
@@ -593,7 +593,8 @@ export interface MarketToken {
  * It combines data from both Gamma API (volume, liquidity) and CLOB API (trading data).
  *
  * BREAKING CHANGE (v2.0): tokens is now an array instead of { yes, no } object.
- * Use tokens.find(t => t.outcome === 'Yes') to get specific outcomes.
+ * For binary markets, use getBinaryTokens(tokens) or tokens[0]/tokens[1]
+ * instead of assuming outcome names are always "Yes"/"No".
  */
 export interface UnifiedMarket {
   /** Market condition ID (primary identifier) */
@@ -605,8 +606,9 @@ export interface UnifiedMarket {
   /** Market description */
   description?: string;
   /**
-   * Market tokens (YES/NO outcomes)
-   * @example tokens.find(t => t.outcome === 'Yes')?.price
+   * Market tokens.
+   * For binary markets, tokens[0] is the primary outcome and tokens[1] is the secondary outcome.
+   * @example getBinaryTokens(market.tokens)?.primary.price
    */
   tokens: MarketToken[];
   /** Total volume (USDC) */
@@ -645,7 +647,7 @@ export interface UnifiedMarket {
  * - Heads/Tails (coin flips)
  *
  * Using index-based access (tokens[0], tokens[1]) is more reliable
- * than name-based access (outcome === 'Yes').
+ * than name-based access using outcome strings.
  */
 export interface BinaryTokens {
   /** First outcome token (Yes/Up/Team1...) - corresponds to tokens[0] */
@@ -675,7 +677,7 @@ export interface BinaryTokens {
  * ```
  */
 export function getBinaryTokens(tokens: MarketToken[]): BinaryTokens | null {
-  if (!tokens || tokens.length < 2) return null;
+  if (!tokens || tokens.length !== 2) return null;
   return {
     primary: tokens[0],
     secondary: tokens[1],

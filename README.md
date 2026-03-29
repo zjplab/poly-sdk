@@ -177,9 +177,13 @@ const sdk = new PolymarketSDK();
 
 // Get market by slug or condition ID
 const market = await sdk.getMarket('will-trump-win-2024');
+const binary = getBinaryTokens(market.tokens);
+if (!binary) throw new Error('Expected binary market');
+const yesToken = binary.primary;
+const noToken = binary.secondary;
 console.log(`${market.question}`);
-console.log(`YES: ${market.tokens.find(t => t.outcome === 'Yes')?.price}`);
-console.log(`NO: ${market.tokens.find(t => t.outcome === 'No')?.price}`);
+console.log(`YES (${yesToken.outcome}): ${yesToken.price}`);
+console.log(`NO (${noToken.outcome}): ${noToken.price}`);
 
 // Get processed orderbook with analytics
 const orderbook = await sdk.getOrderbook(market.conditionId);
@@ -226,7 +230,7 @@ sdk.stop();
 ### Email / Magic Login (funder account)
 
 ```typescript
-import { PolymarketSDK } from '@catalyst-team/poly-sdk';
+import { PolymarketSDK, getBinaryTokens } from '@catalyst-team/poly-sdk';
 
 const sdk = await PolymarketSDK.create({
   privateKey: process.env.POLYMARKET_PRIVATE_KEY!, // Exported signer private key
@@ -833,8 +837,9 @@ const noPrice = market.tokens.no.price;
 **After (v0.3.0)**:
 ```typescript
 // Array of MarketToken objects
-const yesToken = market.tokens.find(t => t.outcome === 'Yes');
-const noToken = market.tokens.find(t => t.outcome === 'No');
+const binary = getBinaryTokens(market.tokens);
+const yesToken = binary?.primary;
+const noToken = binary?.secondary;
 
 const yesPrice = yesToken?.price;
 const noPrice = noToken?.price;
@@ -844,13 +849,13 @@ const noPrice = noToken?.price;
 
 ```typescript
 // Helper function for migration
-function getTokenPrice(market: UnifiedMarket, outcome: 'Yes' | 'No'): number {
-  return market.tokens.find(t => t.outcome === outcome)?.price ?? 0;
+function getTokenPrice(market: UnifiedMarket, side: 'yes' | 'no'): number {
+  return market.tokens[side === 'yes' ? 0 : 1]?.price ?? 0;
 }
 
 // Usage
-const yesPrice = getTokenPrice(market, 'Yes');
-const noPrice = getTokenPrice(market, 'No');
+const yesPrice = getTokenPrice(market, 'yes');
+const noPrice = getTokenPrice(market, 'no');
 ```
 
 **Why the change?** The array format better supports multi-outcome markets and is more consistent with the Polymarket API response format.
