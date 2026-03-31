@@ -141,6 +141,13 @@ export class RelayerService {
   }
 
   /**
+   * Get the ethers Provider used by this service (for on-chain read calls)
+   */
+  getProvider(): ethers.providers.Provider {
+    return this.wallet.provider;
+  }
+
+  /**
    * Get the deterministic Safe address for this EOA (without deploying)
    *
    * Uses the same CREATE2 derivation as the Relayer to compute the Safe address.
