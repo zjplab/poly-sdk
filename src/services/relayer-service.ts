@@ -213,7 +213,7 @@ export class RelayerService {
         };
       }
 
-      if (tx.state === RelayerState.FAILED) {
+      if (tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           safeAddress: '',
@@ -254,7 +254,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `USDC approval failed: ${tx?.state || 'No transaction'}`,
@@ -306,7 +306,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `USDC transfer failed: ${tx?.state || 'No transaction'}`,
@@ -345,7 +345,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `ERC1155 approval failed: ${tx?.state || 'No transaction'}`,
@@ -402,7 +402,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `Split failed: ${tx?.state || 'No transaction'}`,
@@ -451,7 +451,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `Merge failed: ${tx?.state || 'No transaction'}`,
@@ -514,7 +514,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `Redeem failed: ${tx?.state || 'No transaction'}`,
@@ -561,7 +561,7 @@ export class RelayerService {
 
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `Redeem failed: ${tx?.state || 'No transaction'}`,
@@ -636,7 +636,7 @@ export class RelayerService {
       const response = await this.relayClient.execute(transactions);
       const tx = await response.wait();
 
-      if (!tx || tx.state === RelayerState.FAILED) {
+      if (!tx || tx.state === RelayerState.FAILED || tx.state === RelayerState.INVALID) {
         return {
           success: false,
           errorMessage: `Batch execution failed: ${tx?.state || 'No transaction'}`,
