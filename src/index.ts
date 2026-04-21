@@ -303,11 +303,16 @@ export { PositionTracker, CopyEngine } from './smart-money/copy.js';
 export { TradeMonitor } from './smart-money/monitor.js';
 export { SmartMoneyCore } from './smart-money/core.js';
 export { WalletReports } from './smart-money/reports.js';
+export { categorizeMarket, CATEGORY_KEYWORDS } from './smart-money/constants.js';
 export type {
   PositionDiff,
   OrderRequest,
   TradeEvent,
   MonitorOptions,
+  DailyWalletReport,
+  WalletLifecycleReport,
+  WalletChartData,
+  TextReport,
 } from './smart-money/types.js';
 
 // DipArbService - Dip Arbitrage for 15m/5m UP/DOWN markets
