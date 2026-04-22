@@ -91,8 +91,17 @@ export class PositionTracker extends EventEmitter {
   async poll(address: string): Promise<PositionDiff[]> {
     const key = address.toLowerCase();
     const fresh = await this.dataApi.getPositions(key, { limit: 200 });
-    const cached = this.cache.get(key) ?? new Map<string, Position>();
+    const freshMap = new Map<string, Position>(
+      fresh.map((p: Position) => [`${p.conditionId}:${p.outcomeIndex ?? p.outcome}`, p])
+    );
 
+    // First poll: establish baseline without firing 'new' events.
+    if (!this.cache.has(key)) {
+      this.cache.set(key, freshMap);
+      return [];
+    }
+
+    const cached = this.cache.get(key)!;
     const diffs: PositionDiff[] = [];
 
     for (const pos of fresh) {
@@ -109,11 +118,8 @@ export class PositionTracker extends EventEmitter {
     }
 
     // Detect closed positions
-    const freshKeys = new Set<string>(
-      fresh.map((p: Position) => `${p.conditionId}:${p.outcomeIndex ?? p.outcome}`)
-    );
     for (const [posKey, prev] of cached) {
-      if (!freshKeys.has(posKey)) {
+      if (!freshMap.has(posKey)) {
         diffs.push({
           type: 'closed',
           conditionId: prev.conditionId,
@@ -123,10 +129,7 @@ export class PositionTracker extends EventEmitter {
     }
 
     // Update cache
-    this.cache.set(
-      key,
-      new Map<string, Position>(fresh.map((p: Position) => [`${p.conditionId}:${p.outcomeIndex ?? p.outcome}`, p]))
-    );
+    this.cache.set(key, freshMap);
 
     return diffs;
   }
