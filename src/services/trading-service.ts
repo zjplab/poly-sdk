@@ -431,6 +431,25 @@ export class TradingService {
       builderConfig,
     });
 
+    // PR-1: builderCode boot echo (fires once per TradingService init).
+    log.info('TradingService V2 initialized', {
+      chainId: this.chainId,
+      builderCode: builderConfig?.builderCode ?? '(none)',
+      builder_attribution: builderConfig?.builderCode === '0x0000000000000000000000000000000000000000000000000000000000000000'
+        ? 'zero_no_rewards'
+        : (builderConfig?.builderCode ? 'set' : 'absent'),
+      signature_type: isBuilderMode ? 'POLY_GNOSIS_SAFE' : 'EOA',
+      funder_address: this.config.safeAddress ?? '(EOA-self)',
+    });
+
+    // PR-4: EIP-712 V2 domain echo (constants inlined for log clarity / drift detection).
+    log.info('EIP-712 V2 domain', {
+      domain_name: 'Polymarket CTF Exchange',
+      domain_version: '2',  // V2 cutover hardcoded; SDK auto-resolves but we want this in our log for drift detection
+      chain_id: 137,
+      verifying_contract: '0xE111180000d2663C0091e4f400237545B87B996B',
+    });
+
     this.initialized = true;
   }
 

@@ -296,6 +296,22 @@ export class RealtimeServiceV2 extends EventEmitter {
   // Timer to batch market subscription updates
   private marketSubscriptionBatchTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // ----- Subscribe-ACK observability (2026-05-06, L13 lesson) ---------------
+  // Polymarket WS does NOT send an explicit subscribe ACK frame. The only
+  // signal that a subscription "took" is the arrival of a `book` / `price_change`
+  // / `last_trade_price` / `best_bid_ask` event for that asset_id. When the
+  // server silently drops a subscribe (e.g. OB never arrives for short-duration
+  // 5m / 15m crypto markets), we used to have NO log layer to detect it.
+  //
+  // We now track per-tokenId "sent timestamp" and confirm ack on first inbound
+  // event. After 60s of silence we emit a CRITICAL warning so the miss is
+  // visible in logs instead of silently swallowed.
+  /** assetId -> sub-sent timestamp (ms) for tokens awaiting first inbound event */
+  private pendingSubAck: Map<string, number> = new Map();
+  /** Timer to fire CRITICAL warning when any pendingSubAck exceeds 60s */
+  private subAckWarnTimer: ReturnType<typeof setTimeout> | null = null;
+  private static readonly SUB_ACK_TIMEOUT_MS = 60_000;
+
   // Caches
   private priceCache: Map<string, PriceUpdate> = new Map();
   private bookCache: Map<string, OrderbookSnapshot> = new Map();
@@ -484,6 +500,11 @@ export class RealtimeServiceV2 extends EventEmitter {
     this.cryptoBinanceSymbols.clear();
     this.cryptoChainlinkSymbols.clear();
     this.userCredentials = null;
+    this.pendingSubAck.clear();
+    if (this.subAckWarnTimer) {
+      clearTimeout(this.subAckWarnTimer);
+      this.subAckWarnTimer = null;
+    }
   }
 
   private cancelMarketSubscriptionBatch(): void {
@@ -578,6 +599,8 @@ export class RealtimeServiceV2 extends EventEmitter {
         // Remove these token IDs from accumulated set
         for (const tokenId of tokenIds) {
           this.accumulatedMarketTokenIds.delete(tokenId);
+          // Stop awaiting ack for tokens we're explicitly unsubscribing.
+          this.pendingSubAck.delete(tokenId);
         }
 
         // H0 fix (2026-05-03): explicit UNSUBSCRIBE to server
@@ -648,6 +671,25 @@ export class RealtimeServiceV2 extends EventEmitter {
 
     const subMsg = { subscriptions };
     this.log(`Sending merged market subscription with ${allTokenIds.length} tokens`);
+
+    // L13 lesson (2026-05-06): track per-token sub-sent timestamp so we can
+    // (a) measure ack latency on first inbound event and
+    // (b) raise CRITICAL warning if NO event ever arrives (silent server drop).
+    const sentAt = Date.now();
+    for (const tokenId of allTokenIds) {
+      // Only record if we don't already have an ack pending for this token.
+      // (Refresh / reconnect re-sends keep the original sentAt to avoid masking
+      // a true silent-drop; if a token previously confirmed and we re-send, we
+      // start a fresh observation window.)
+      if (!this.pendingSubAck.has(tokenId)) {
+        this.pendingSubAck.set(tokenId, sentAt);
+      }
+    }
+    this.logAlways('info',
+      `WS sub sent {topic: clob_market, tokenCount: ${allTokenIds.length}, ` +
+      `sample: [${allTokenIds.slice(0, 3).map(t => t.slice(-8)).join(',')}]}`);
+    this.scheduleSubAckTimeoutCheck();
+
     this.client.subscribe(subMsg);
 
     // Store for reconnection (use a fixed key for the merged subscription)
@@ -656,6 +698,76 @@ export class RealtimeServiceV2 extends EventEmitter {
 
     // Schedule refresh to ensure we receive updates (not just snapshot)
     this.scheduleSubscriptionRefresh('__merged_market__');
+  }
+
+  /**
+   * Record first inbound market event for a tokenId — confirms WS sub ack.
+   * Logs latency once, then removes the token from pendingSubAck so subsequent
+   * events are silent.
+   */
+  private observeMarketAck(assetId: string): void {
+    if (!assetId) return;
+    const sentAt = this.pendingSubAck.get(assetId);
+    if (sentAt === undefined) return;
+    const latencyMs = Date.now() - sentAt;
+    this.pendingSubAck.delete(assetId);
+    this.logAlways('info',
+      `WS sub ack confirmed {tokenId: ${assetId.slice(-12)}, latency_ms: ${latencyMs}}`);
+  }
+
+  /**
+   * Schedule a one-shot check 60s after the most recent sub-send. If any
+   * tokenId is still in pendingSubAck and was sent ≥60s ago, emit CRITICAL.
+   * Reschedules itself if there are still un-acked pending tokens with newer
+   * send timestamps.
+   */
+  private scheduleSubAckTimeoutCheck(): void {
+    if (this.subAckWarnTimer) return; // already scheduled — coalesce
+    this.subAckWarnTimer = setTimeout(() => {
+      this.subAckWarnTimer = null;
+      const now = Date.now();
+      const stale: Array<{ tokenId: string; ageMs: number }> = [];
+      for (const [tokenId, sentAt] of this.pendingSubAck.entries()) {
+        const ageMs = now - sentAt;
+        if (ageMs >= RealtimeServiceV2.SUB_ACK_TIMEOUT_MS) {
+          stale.push({ tokenId, ageMs });
+        }
+      }
+      if (stale.length > 0) {
+        const sample = stale.slice(0, 5)
+          .map(s => `${s.tokenId.slice(-8)}@${s.ageMs}ms`).join(',');
+        this.logAlways('error',
+          `CRITICAL: WS sub appears to have NO ACK ` +
+          `{unacked_tokens: ${stale.length}/${this.pendingSubAck.size}, ` +
+          `sample: [${sample}]}`);
+      }
+      // If there are still un-acked pending tokens (newer than 60s ago),
+      // reschedule so we re-evaluate when they age out.
+      if (this.pendingSubAck.size > 0) {
+        this.scheduleSubAckTimeoutCheck();
+      }
+    }, RealtimeServiceV2.SUB_ACK_TIMEOUT_MS);
+  }
+
+  /**
+   * Log unconditionally (bypasses this.config.debug gate).
+   * Used for observability events that must always be visible: subscribe-sent,
+   * subscribe-ack-confirmed, subscribe-ack-timeout-CRITICAL.
+   */
+  private logAlways(level: 'info' | 'error', message: string): void {
+    const prefixed = `[RealtimeService] ${message}`;
+    if (this.config.logger) {
+      if (level === 'error') {
+        // Fall back to warn if no error level (interface defines error)
+        this.config.logger.error(prefixed);
+      } else {
+        this.config.logger.info(prefixed);
+      }
+    } else if (level === 'error') {
+      log.error(prefixed);
+    } else {
+      log.info(prefixed);
+    }
   }
 
   /**
@@ -1383,6 +1495,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         for (const item of items) {
           const book = this.parseOrderbook(item as Record<string, unknown>, timestamp);
           if (book.assetId) {
+            this.observeMarketAck(book.assetId);
             this.bookCache.set(book.assetId, book);
             this.emit('orderbook', book);
           }
@@ -1395,6 +1508,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         for (const item of items) {
           const change = this.parsePriceChange(item as Record<string, unknown>, timestamp);
           if (change.assetId) {
+            this.observeMarketAck(change.assetId);
             this.emit('priceChange', change);
           }
         }
@@ -1406,6 +1520,7 @@ export class RealtimeServiceV2 extends EventEmitter {
         for (const item of items) {
           const trade = this.parseLastTrade(item as Record<string, unknown>, timestamp);
           if (trade.assetId) {
+            this.observeMarketAck(trade.assetId);
             this.lastTradeCache.set(trade.assetId, trade);
             this.emit('lastTrade', trade);
           }
@@ -1432,6 +1547,9 @@ export class RealtimeServiceV2 extends EventEmitter {
           spread: Number(payload.spread) || 0,
           timestamp,
         };
+        if (bestPrices.assetId) {
+          this.observeMarketAck(bestPrices.assetId);
+        }
         this.emit('bestBidAsk', bestPrices);
         break;
       }
