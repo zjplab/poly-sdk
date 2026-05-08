@@ -355,7 +355,14 @@ export class RealtimeServiceV2 extends EventEmitter {
       cryptoConnectResolve = resolve;
     });
 
-    // Main client for MARKET/USER channels
+    // Main client for MARKET/USER channels.
+    //
+    // Propagate the host-injected logger down to child RealTimeDataClient so
+    // WS-layer diagnostics (`Pong timeout - connection dead`,
+    // `Status changed: DISCONNECTED`, `Handling dead connection`, …) land in
+    // the host's logger instead of the no-op SDK module logger. (Fix-E for
+    // task-fix-market-data-ws-subscribe — without this propagation, hosts that
+    // injected `logger:` into RealtimeServiceV2 still lost child WS events.)
     this.client = new RealTimeDataClient({
       onConnect: this.handleConnect.bind(this),
       onMessage: this.handleMessage.bind(this),
@@ -363,6 +370,7 @@ export class RealtimeServiceV2 extends EventEmitter {
       autoReconnect: this.config.autoReconnect,
       pingInterval: this.config.pingInterval,
       debug: this.config.debug,
+      logger: this.config.logger,
     });
 
     // User client for USER channel (clob_user events)
@@ -380,6 +388,7 @@ export class RealtimeServiceV2 extends EventEmitter {
       autoReconnect: this.config.autoReconnect,
       pingInterval: this.config.pingInterval,
       debug: this.config.debug,
+      logger: this.config.logger,
     });
 
     // Crypto client for LIVE_DATA channel (crypto_prices)
@@ -397,6 +406,7 @@ export class RealtimeServiceV2 extends EventEmitter {
       autoReconnect: this.config.autoReconnect,
       pingInterval: 5_000, // Polymarket RTDS requires 5s PING interval (https://docs.polymarket.com/market-data/websocket/rtds)
       debug: this.config.debug,
+      logger: this.config.logger,
     });
 
     this.client.connect();

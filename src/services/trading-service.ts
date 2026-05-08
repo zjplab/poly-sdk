@@ -44,7 +44,7 @@ import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError, ErrorCode } from '../core/errors.js';
-import { createModuleLogger } from '../core/logger.js';
+import { createModuleLogger, type Logger } from '../core/logger.js';
 
 const log = createModuleLogger('trading-service');
 import type { Side, OrderType } from '../core/types.js';
@@ -129,6 +129,19 @@ export interface TradingServiceConfig {
   safeAddress?: string;
   /** Data API client — required for clearPosition() to fetch size internally */
   dataApi?: DataApiClient;
+  /**
+   * Optional structured logger — when injected, replaces the module-scope
+   * `createModuleLogger('trading-service')` for THIS instance's diagnostic
+   * output (`TradingService V2 initialized`, `EIP-712 V2 domain`,
+   * `Order missing side field`). Without this, those messages route through
+   * poly-sdk's `_logger` which (post-Fix-F, 2026-05-08) defaults to console
+   * but used to be a silent no-op until any host called `setLogger()`.
+   *
+   * Recommended for any host that wants TradingService events tagged with
+   * its own logger (e.g. trading-engine's `LiveOrderExecutor`, market-data
+   * worker). Fix-G for task-fix-market-data-ws-subscribe.
+   */
+  logger?: Logger;
 }
 
 // Order types
@@ -356,6 +369,16 @@ export class TradingService {
 
   private dataApi: DataApiClient | undefined;
 
+  /**
+   * Resolve diagnostic logger: instance-injected `config.logger` if present,
+   * else the module-scope `createModuleLogger('trading-service')` (which now
+   * defaults to console post-Fix-F instead of no-op). Fix-G — see
+   * TradingServiceConfig.logger doc.
+   */
+  private get diag(): Logger {
+    return this.config.logger ?? log;
+  }
+
   constructor(
     private rateLimiter: RateLimiter,
     private cache: UnifiedCache,
@@ -432,7 +455,7 @@ export class TradingService {
     });
 
     // PR-1: builderCode boot echo (fires once per TradingService init).
-    log.info('TradingService V2 initialized', {
+    this.diag.info('TradingService V2 initialized', {
       chainId: this.chainId,
       builderCode: builderConfig?.builderCode ?? '(none)',
       builder_attribution: builderConfig?.builderCode === '0x0000000000000000000000000000000000000000000000000000000000000000'
@@ -443,7 +466,7 @@ export class TradingService {
     });
 
     // PR-4: EIP-712 V2 domain echo (constants inlined for log clarity / drift detection).
-    log.info('EIP-712 V2 domain', {
+    this.diag.info('EIP-712 V2 domain', {
       domain_name: 'Polymarket CTF Exchange',
       domain_version: '2',  // V2 cutover hardcoded; SDK auto-resolves but we want this in our log for drift detection
       chain_id: 137,
@@ -898,7 +921,7 @@ export class TradingService {
 
         // Validate required fields to prevent runtime errors
         if (!order.side) {
-          log.warn(`Order ${orderId} missing side field, returning null`);
+          this.diag.warn(`Order ${orderId} missing side field, returning null`);
           return null;
         }
 
