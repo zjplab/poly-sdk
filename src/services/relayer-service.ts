@@ -711,10 +711,17 @@ export class RelayerService {
       to = NEG_RISK_ADAPTER;
     } else {
       // Standard CTF: redeemPositions(collateral, parentCollectionId, conditionId, indexSets)
+      // 2026-05-10: V2 binary CTF markets are still registered with USDC.e as the
+      // underlying collateral (pUSD is the trading wrapper, but the conditional
+      // splits/merges happen at the USDC.e layer). Using pUSD here causes the Safe
+      // call to revert with no on-chain tx (relay returns STATE_FAILED + empty hash).
+      // Empirical proof: probe-relayer-failure.ts experiment 2026-05-10 showed
+      // USDC.e param succeeded (tx 0x488dba6868...) where pUSD param failed across
+      // [1] / [1,2] index sets and NegRiskAdapter.
       const indexSets = outcome === 'YES' ? [1] : [2];
       const ctfInterface = new ethers.utils.Interface(CTF_ABI);
       data = ctfInterface.encodeFunctionData('redeemPositions', [
-        POLYGON_CONTRACTS_V2.pUSD,
+        POLYGON_CONTRACTS_V2.usdcE,
         ethers.constants.HashZero,
         conditionId,
         indexSets,
@@ -837,9 +844,11 @@ export class RelayerService {
         data = negRiskInterface.encodeFunctionData('redeemPositions', [conditionId, amounts]);
         to = NEG_RISK_ADAPTER;
       } else {
+        // 2026-05-10 (B14): V2 standard CTF redeem uses USDC.e collateral.
+        // See task-polymarket-v2-redeem-investigation/4-redeem/gap-analysis.md
         const indexSets = outcome === 'YES' ? [1] : [2];
         data = ctfInterface.encodeFunctionData('redeemPositions', [
-          POLYGON_CONTRACTS_V2.pUSD,
+          POLYGON_CONTRACTS_V2.usdcE,
           ethers.constants.HashZero,
           conditionId,
           indexSets,

@@ -155,6 +155,11 @@ describe('RelayerService.split — pUSD-only collateral', () => {
     expect(capturedExecute!.txs[0].to).toBe(CTF_CONTRACT);
 
     const decoded = CTF_IFACE.decodeFunctionData('splitPosition', capturedExecute!.txs[0].data);
+    // split/merge use pUSD (V2 trading-layer wrapper). Note: this is a
+    // theoretical path — s1 strategy never calls split/merge via Relayer
+    // directly; CLOB Exchange handles split internally during fills. If we
+    // ever DO use split/merge via Relayer, this might need empirical
+    // verification (similar to B14 redeem investigation).
     expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.pUSD.toLowerCase());
   });
 });
@@ -167,6 +172,7 @@ describe('RelayerService.merge — pUSD-only collateral', () => {
     expect(capturedExecute!.txs[0].to).toBe(CTF_CONTRACT);
 
     const decoded = CTF_IFACE.decodeFunctionData('mergePositions', capturedExecute!.txs[0].data);
+    // See split note above re: pUSD vs USDC.e.
     expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.pUSD.toLowerCase());
   });
 });
@@ -175,8 +181,8 @@ describe('RelayerService.merge — pUSD-only collateral', () => {
 // redeem / redeemBatch — pUSD only (V2 trading collateral)
 // ---------------------------------------------------------------------------
 
-describe('RelayerService.redeem — pUSD-only collateral', () => {
-  it('encodes pUSD on the standard CTF redeem path (V2)', async () => {
+describe('RelayerService.redeem — V2 standard CTF redeem uses USDC.e collateral', () => {
+  it('encodes USDC.e on the standard CTF redeem path (B14, 2026-05-10)', async () => {
     const svc = makeService();
     const r = await svc.redeem(TEST_CONDITION_ID, 'YES');
     expect(r.success).toBe(true);
@@ -186,7 +192,11 @@ describe('RelayerService.redeem — pUSD-only collateral', () => {
       'redeemPositions',
       capturedExecute!.txs[0].data
     );
-    expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.pUSD.toLowerCase());
+    // 2026-05-10 (B14): V2 binary CTF markets register USDC.e as the underlying
+    // CTF collateral; pUSD is only the V2 trading-layer wrapper. CTF.redeemPositions
+    // must reference USDC.e to find the split records. See
+    // task-polymarket-v2-redeem-investigation/4-redeem/gap-analysis.md
+    expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.usdcE.toLowerCase());
   });
 
   it('routes through NEG_RISK_ADAPTER for negRisk markets (no collateral arg on adapter)', async () => {
@@ -198,8 +208,8 @@ describe('RelayerService.redeem — pUSD-only collateral', () => {
   });
 });
 
-describe('RelayerService.redeemBatch — pUSD-only collateral', () => {
-  it('encodes pUSD on every standard CTF entry', async () => {
+describe('RelayerService.redeemBatch — V2 standard CTF redeem uses USDC.e collateral', () => {
+  it('encodes USDC.e on every standard CTF entry (B14, 2026-05-10)', async () => {
     const svc = makeService();
     const r = await svc.redeemBatch([
       { conditionId: TEST_CONDITION_ID, outcome: 'YES' },
@@ -211,7 +221,11 @@ describe('RelayerService.redeemBatch — pUSD-only collateral', () => {
     for (const tx of capturedExecute!.txs) {
       expect(tx.to).toBe(CTF_CONTRACT);
       const decoded = CTF_IFACE.decodeFunctionData('redeemPositions', tx.data);
-      expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.pUSD.toLowerCase());
+      // 2026-05-10 (B14): V2 binary CTF markets register USDC.e as the underlying
+    // CTF collateral; pUSD is only the V2 trading-layer wrapper. CTF.redeemPositions
+    // must reference USDC.e to find the split records. See
+    // task-polymarket-v2-redeem-investigation/4-redeem/gap-analysis.md
+    expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.usdcE.toLowerCase());
     }
   });
 });
