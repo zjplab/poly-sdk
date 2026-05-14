@@ -48,6 +48,7 @@ export type OrderType = 'GTC' | 'FOK' | 'GTD' | 'FAK';
  *
  * State Mapping (Polymarket API → Internal):
  * - API "live"      → open (order in orderbook, no fills)
+ * - API "unmatched" → open (accepted by CLOB, not matched yet)
  * - API "matched"   → partially_filled (some fills) OR filled (fully filled)
  * - API "delayed"   → pending (order submitted but not yet in orderbook)
  * - API "cancelled" → cancelled
@@ -75,7 +76,7 @@ export enum OrderStatus {
   /**
    * open - Order submitted and active in orderbook, no fills yet
    *
-   * Polymarket API status: "live"
+   * Polymarket API status: "live" or "unmatched"
    * Transitions:
    * - → partially_filled (first fill received)
    * - → filled (immediate full fill, rare)
@@ -89,7 +90,9 @@ export enum OrderStatus {
   /**
    * partially_filled - Order has received some fills but not complete
    *
-   * Polymarket API status: "matched" (size_matched > 0 && size_matched < original_size)
+   * Polymarket API status: "matched" (size_matched > 0 && size_matched < original_size).
+   * If an active-looking status such as "live" or "unmatched" reports size_matched > 0,
+   * local accounting still derives partially_filled from quantity.
    * Transitions:
    * - → filled (remaining size filled)
    * - → cancelled (user cancels remaining)
