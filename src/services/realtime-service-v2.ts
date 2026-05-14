@@ -27,6 +27,13 @@ import { createModuleLogger } from '../core/logger.js';
 
 const log = createModuleLogger('realtime-v2');
 
+function normalizeUserOrderEventType(value: unknown): 'PLACEMENT' | 'UPDATE' | 'CANCELLATION' {
+  const text = String(value ?? '').toUpperCase();
+  if (text === 'PLACEMENT' || text === 'PLACE') return 'PLACEMENT';
+  if (text === 'CANCELLATION' || text === 'CANCEL' || text === 'CANCELLED') return 'CANCELLATION';
+  return 'UPDATE';
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -82,7 +89,13 @@ export interface LastTradeInfo {
 
 export interface PriceChange {
   assetId: string;
-  changes: Array<{ price: string; size: string }>;
+  changes: Array<{
+    price: string;
+    size: string;
+    side?: string;
+    bestBid?: string;
+    bestAsk?: string;
+  }>;
   timestamp: number;
 }
 
@@ -1606,14 +1619,14 @@ export class RealtimeServiceV2 extends EventEmitter {
     if (type === 'order') {
       // order event: Order placed (PLACEMENT), updated (UPDATE), or cancelled (CANCELLATION)
       const order: UserOrder = {
-        orderId: payload.order_id as string || '',
+        orderId: payload.order_id as string || payload.id as string || '',
         market: payload.market as string || '',
-        asset: payload.asset as string || '',
+        asset: payload.asset_id as string || payload.asset as string || '',
         side: payload.side as 'BUY' | 'SELL',
         price: Number(payload.price) || 0,
         originalSize: Number(payload.original_size) || 0,
         sizeMatched: Number(payload.size_matched) || 0,  // API field: size_matched
-        eventType: payload.event_type as 'PLACEMENT' | 'UPDATE' | 'CANCELLATION',
+        eventType: normalizeUserOrderEventType(payload.event_type),
         timestamp,
       };
       this.emit('userOrder', order);
@@ -1777,9 +1790,18 @@ export class RealtimeServiceV2 extends EventEmitter {
   }
 
   private parsePriceChange(payload: Record<string, unknown>, timestamp: number): PriceChange {
-    const changes = payload.price_changes as Array<{ price: string; size: string }> || [];
+    const rawChanges = Array.isArray(payload.price_changes)
+      ? payload.price_changes as Array<Record<string, unknown>>
+      : ('price' in payload && 'size' in payload ? [payload] : []);
+    const changes = rawChanges.map((change) => ({
+      price: String(change.price ?? ''),
+      size: String(change.size ?? ''),
+      side: change.side !== undefined ? String(change.side) : undefined,
+      bestBid: change.best_bid !== undefined ? String(change.best_bid) : undefined,
+      bestAsk: change.best_ask !== undefined ? String(change.best_ask) : undefined,
+    }));
     return {
-      assetId: payload.asset_id as string || '',
+      assetId: payload.asset_id as string || rawChanges.find((c) => c.asset_id)?.asset_id as string || '',
       changes,
       timestamp,
     };

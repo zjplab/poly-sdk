@@ -154,6 +154,10 @@ export interface LimitOrderParams {
   expiration?: number;
   /** Market-specific minimum order size (from CLOB API). Falls back to MIN_ORDER_SIZE_SHARES if not provided. */
   minimumOrderSize?: number;
+  /** Optional hot-path metadata from WS/orderbook cache. Avoids REST /tick-size during order submission. */
+  tickSize?: TickSize;
+  /** Optional hot-path metadata from market cache. Avoids REST /neg-risk during order submission. */
+  negRisk?: boolean;
 }
 
 export interface MarketOrderParams {
@@ -162,6 +166,10 @@ export interface MarketOrderParams {
   amount: number;
   price?: number;
   orderType?: 'FOK' | 'FAK';
+  /** Optional hot-path metadata from WS/orderbook cache. Avoids REST /tick-size during order submission. */
+  tickSize?: TickSize;
+  /** Optional hot-path metadata from market cache. Avoids REST /neg-risk during order submission. */
+  negRisk?: boolean;
 }
 
 /** Parameters for clearing a token position (market sell) */
@@ -521,6 +529,27 @@ export class TradingService {
     return this.clobClient!;
   }
 
+  private seedClobClientMarketMetadata(
+    tokenId: string,
+    metadata: { tickSize?: TickSize; negRisk?: boolean },
+  ): void {
+    if (!this.clobClient) return;
+    const client = this.clobClient as unknown as {
+      tickSizes?: Record<string, TickSize>;
+      negRisk?: Record<string, boolean>;
+    };
+    if (metadata.tickSize) {
+      client.tickSizes ??= {};
+      client.tickSizes[tokenId] = metadata.tickSize;
+      this.tickSizeCache.set(tokenId, metadata.tickSize);
+    }
+    if (metadata.negRisk != null) {
+      client.negRisk ??= {};
+      client.negRisk[tokenId] = metadata.negRisk;
+      this.negRiskCache.set(tokenId, metadata.negRisk);
+    }
+  }
+
   // ============================================================================
   // Trading Helpers
   // ============================================================================
@@ -588,12 +617,16 @@ export class TradingService {
     // V2 attribution: every signed order MUST carry a builder code.
     this.ensureBuilderCode();
     const client = await this.ensureInitialized();
+    this.seedClobClientMarketMetadata(params.tokenId, {
+      tickSize: params.tickSize,
+      negRisk: params.negRisk,
+    });
 
     return this.rateLimiter.execute(ApiType.CLOB_API, async () => {
       try {
         const [tickSize, negRisk] = await Promise.all([
-          this.getTickSize(params.tokenId),
-          this.isNegRisk(params.tokenId),
+          params.tickSize ?? this.getTickSize(params.tokenId),
+          params.negRisk ?? this.isNegRisk(params.tokenId),
         ]);
 
         const orderType = params.orderType === 'GTD' ? ClobOrderType.GTD : ClobOrderType.GTC;
@@ -661,12 +694,16 @@ export class TradingService {
 
     this.ensureBuilderCode();
     const client = await this.ensureInitialized();
+    this.seedClobClientMarketMetadata(params.tokenId, {
+      tickSize: params.tickSize,
+      negRisk: params.negRisk,
+    });
 
     return this.rateLimiter.execute(ApiType.CLOB_API, async () => {
       try {
         const [tickSize, negRisk] = await Promise.all([
-          this.getTickSize(params.tokenId),
-          this.isNegRisk(params.tokenId),
+          params.tickSize ?? this.getTickSize(params.tokenId),
+          params.negRisk ?? this.isNegRisk(params.tokenId),
         ]);
 
         const orderType = params.orderType === 'FAK' ? ClobOrderType.FAK : ClobOrderType.FOK;
@@ -685,17 +722,16 @@ export class TradingService {
           orderType
         );
 
-        // FOK orders: clob-client may return orderID with success=undefined when order was
-        // accepted but not filled. Only trust explicit success=true.
-        // For non-FOK orders, having an orderID or transaction hash also indicates success.
+        // FOK/FAK orders can return an orderID for a terminal no-fill/killed
+        // response. Treating orderID alone as success creates ghost open orders
+        // and lets live strategies count killed FAK attempts as accepted orders.
+        // For immediate market orders, only explicit success=true means a fill
+        // path was accepted by CLOB.
         const isFokOrder = params.orderType !== 'FAK'; // default is FOK
-        // FOK: only trust explicit success=true (orderID alone means accepted-but-killed for FOK).
-        // FAK: orderID presence indicates success; transactionHashes alone is NOT a success signal.
-        const success = result.success === true ||
-          (!isFokOrder && result.success !== false && result.orderID !== undefined && result.orderID !== '');
+        const success = result.success === true;
 
         const errorMsg = !success
-          ? (result.errorMsg || `Market order ${isFokOrder ? 'FOK not filled' : 'rejected'} (status: ${result.status ?? 'unknown'}, orderID: ${result.orderID ?? 'none'})`)
+          ? (result.errorMsg || `Market order ${isFokOrder ? 'FOK not filled' : 'FAK killed/no-fill'} (status: ${result.status ?? 'unknown'}, orderID: ${result.orderID ?? 'none'})`)
           : result.errorMsg;
 
         return {
