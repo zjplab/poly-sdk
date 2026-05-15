@@ -623,9 +623,12 @@ export class RelayerService {
   }
 
   /**
-   * Merge YES + NO tokens back to pUSD collateral (gasless).
+   * Merge YES + NO tokens back to the underlying CTF collateral (gasless).
    *
-   * V2 markets settle in pUSD only — there is no token override.
+   * V2 CLOB trading uses pUSD as the wrapped trading balance, but the
+   * conditional tokens are registered against USDC.e collateral. Using pUSD
+   * here creates a Safe request that the relayer marks failed without an
+   * on-chain tx hash.
    *
    * @param conditionId - Market condition ID
    * @param amount      - Number of token pairs to merge (e.g., "100" for
@@ -642,7 +645,7 @@ export class RelayerService {
     const ctfInterface = new ethers.utils.Interface(CTF_ABI);
 
     const data = ctfInterface.encodeFunctionData('mergePositions', [
-      POLYGON_CONTRACTS_V2.pUSD,
+      POLYGON_CONTRACTS_V2.usdcE,
       ethers.constants.HashZero,
       conditionId,
       [1, 2],

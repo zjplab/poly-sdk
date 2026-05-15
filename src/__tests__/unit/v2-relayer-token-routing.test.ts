@@ -1,9 +1,9 @@
 /**
  * Unit tests for V2 Relayer collateral-token routing.
  *
- * After the 2026-04-28 V2 cutover, trading collateral is `pUSD`. The
- * trading-related relayer helpers (`split`, `merge`, `redeem`, `redeemBatch`)
- * hardcode pUSD as the on-chain collateral argument. The off-exchange
+ * After the 2026-04-28 V2 cutover, CLOB trading balance is `pUSD`, but
+ * standard CTF split/merge/redeem calls still use the underlying `USDC.e`
+ * collateral. The off-exchange
  * helpers (`approveUsdc`, `transferUsdc`) accept a `CollateralToken`
  * parameter so they can route to either pUSD (V2 trading collateral, the
  * default) or USDC.e (Onramp approval / fund-out collect path).
@@ -144,7 +144,7 @@ describe('RelayerService.transferUsdc — token routing', () => {
 });
 
 // ---------------------------------------------------------------------------
-// split / merge — pUSD only (V2 trading collateral)
+// split / merge — CTF collateral routing
 // ---------------------------------------------------------------------------
 
 describe('RelayerService.split — pUSD-only collateral', () => {
@@ -164,16 +164,15 @@ describe('RelayerService.split — pUSD-only collateral', () => {
   });
 });
 
-describe('RelayerService.merge — pUSD-only collateral', () => {
-  it('encodes pUSD as the mergePositions collateral arg (V2)', async () => {
+describe('RelayerService.merge — standard CTF collateral', () => {
+  it('encodes USDC.e as the mergePositions collateral arg (V2 CTF)', async () => {
     const svc = makeService();
     const r = await svc.merge(TEST_CONDITION_ID, '10');
     expect(r.success).toBe(true);
     expect(capturedExecute!.txs[0].to).toBe(CTF_CONTRACT);
 
     const decoded = CTF_IFACE.decodeFunctionData('mergePositions', capturedExecute!.txs[0].data);
-    // See split note above re: pUSD vs USDC.e.
-    expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.pUSD.toLowerCase());
+    expect(decoded.collateralToken.toLowerCase()).toBe(POLYGON_CONTRACTS_V2.usdcE.toLowerCase());
   });
 });
 
