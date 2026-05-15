@@ -27,6 +27,8 @@
  *   for gasless TX envelopes; only the *order signing* path swaps to builderCode.
  */
 
+import * as http from 'node:http';
+import * as https from 'node:https';
 import {
   ClobClient,
   Side as ClobSide,
@@ -63,6 +65,26 @@ export const POLYGON_AMOY = 80002;
 
 // CLOB Host
 const CLOB_HOST = 'https://clob.polymarket.com';
+
+let clobHttpKeepAliveConfigured = false;
+
+function configureClobHttpKeepAlive(logger: Logger): void {
+  if (clobHttpKeepAliveConfigured) return;
+  clobHttpKeepAliveConfigured = true;
+
+  const httpAgent = http.globalAgent as http.Agent & { keepAlive: boolean; keepAliveMsecs: number };
+  const httpsAgent = https.globalAgent as https.Agent & { keepAlive: boolean; keepAliveMsecs: number };
+  httpAgent.keepAlive = true;
+  httpAgent.keepAliveMsecs = 30_000;
+  httpsAgent.keepAlive = true;
+  httpsAgent.keepAliveMsecs = 30_000;
+
+  logger.info('Configured CLOB HTTP keep-alive', {
+    httpKeepAlive: true,
+    httpsKeepAlive: true,
+    keepAliveMsecs: 30_000,
+  });
+}
 
 // ============================================================================
 // Polymarket Order Minimums
@@ -416,6 +438,7 @@ export class TradingService {
     this.chainId = (config.chainId || POLYGON_MAINNET) as Chain;
     this.credentials = config.credentials || null;
     this.dataApi = config.dataApi;
+    configureClobHttpKeepAlive(this.diag);
   }
 
   // ============================================================================
