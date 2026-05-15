@@ -167,7 +167,7 @@ export class RelayerService {
       relayerUrl,
       this.chainId,
       this.wallet,
-      builderConfig
+      builderConfig as any
     );
   }
 

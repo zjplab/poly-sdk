@@ -1426,7 +1426,15 @@ export class TradingService {
         asset_type: assetType as any,
         token_id: tokenId,
       });
-      return { balance: result.balance, allowance: result.allowance };
+      const allowances = result.allowances ?? {};
+      const allowance = Object.values(allowances).reduce((max, value) => {
+        try {
+          return BigInt(value) > BigInt(max) ? value : max;
+        } catch {
+          return max;
+        }
+      }, '0');
+      return { balance: result.balance, allowance };
     });
   }
 
