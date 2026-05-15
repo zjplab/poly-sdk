@@ -172,6 +172,26 @@ export interface MarketOrderParams {
   negRisk?: boolean;
 }
 
+export interface PrepareMarketMetadataParams {
+  conditionId: string;
+  tokenIds: string[];
+  /** Optional hot-path metadata from WS/orderbook cache. */
+  tickSize?: TickSize;
+  /** Optional market-level negRisk flag. */
+  negRisk?: boolean;
+}
+
+export interface PrepareMarketMetadataResult {
+  success: boolean;
+  conditionId: string;
+  tokenCount: number;
+  latencyMs: number;
+  marketInfoMs?: number;
+  builderFeeMs?: number;
+  versionMs?: number;
+  errorMsg?: string;
+}
+
 /** Parameters for clearing a token position (market sell) */
 export interface ClearPositionParams {
   tokenId: string;
@@ -550,6 +570,78 @@ export class TradingService {
     }
   }
 
+  /**
+   * Preload the CLOB client's per-market caches before a latency-sensitive
+   * strategy can emit its first order. The official client always calls
+   * `_ensureMarketInfoCached(tokenID)` and, for builder orders,
+   * `ensureBuilderFeeRateCached(builderCode)` while creating an order. If those
+   * REST calls happen inside the edge window, FAK/FOK orders can miss by seconds.
+   */
+  async prepareMarketMetadata(params: PrepareMarketMetadataParams): Promise<PrepareMarketMetadataResult> {
+    const startedAt = Date.now();
+    try {
+      const client = await this.ensureInitialized();
+      const rawClient = client as unknown as {
+        tokenConditionMap?: Record<string, string>;
+        getClobMarketInfo?: (conditionId: string) => Promise<unknown>;
+        ensureBuilderFeeRateCached?: (builderCode?: string) => Promise<void>;
+        resolveVersion?: (forceUpdate?: boolean) => Promise<number>;
+      };
+
+      rawClient.tokenConditionMap ??= {};
+      for (const tokenId of params.tokenIds) {
+        rawClient.tokenConditionMap[tokenId] = params.conditionId;
+        this.seedClobClientMarketMetadata(tokenId, {
+          tickSize: params.tickSize,
+          negRisk: params.negRisk,
+        });
+      }
+
+      const marketInfoStartedAt = Date.now();
+      if (rawClient.getClobMarketInfo) {
+        await rawClient.getClobMarketInfo(params.conditionId);
+      }
+      const marketInfoMs = Date.now() - marketInfoStartedAt;
+
+      const builderCode = this.config.builderCode !== undefined
+        ? this.config.builderCode
+        : readBuilderCodeOptional();
+      const builderFeeStartedAt = Date.now();
+      if (builderCode && rawClient.ensureBuilderFeeRateCached) {
+        await rawClient.ensureBuilderFeeRateCached(builderCode);
+      }
+      const builderFeeMs = Date.now() - builderFeeStartedAt;
+
+      const versionStartedAt = Date.now();
+      if (rawClient.resolveVersion) {
+        await rawClient.resolveVersion(false);
+      }
+      const versionMs = Date.now() - versionStartedAt;
+
+      const result = {
+        success: true,
+        conditionId: params.conditionId,
+        tokenCount: params.tokenIds.length,
+        latencyMs: Date.now() - startedAt,
+        marketInfoMs,
+        builderFeeMs,
+        versionMs,
+      };
+      this.diag.info('TradingService market metadata prepared', result);
+      return result;
+    } catch (error) {
+      const result = {
+        success: false,
+        conditionId: params.conditionId,
+        tokenCount: params.tokenIds.length,
+        latencyMs: Date.now() - startedAt,
+        errorMsg: error instanceof Error ? error.message : String(error),
+      };
+      this.diag.warn('TradingService market metadata prepare failed', result);
+      return result;
+    }
+  }
+
   // ============================================================================
   // Trading Helpers
   // ============================================================================
@@ -684,6 +776,7 @@ export class TradingService {
    * Market orders below this limit will be rejected by the API.
    */
   async createMarketOrder(params: MarketOrderParams): Promise<OrderResult> {
+    const startedAt = Date.now();
     // Validate minimum order value before sending to API
     if (params.amount < MIN_ORDER_VALUE_USDC) {
       return {
@@ -698,20 +791,23 @@ export class TradingService {
       tickSize: params.tickSize,
       negRisk: params.negRisk,
     });
+    const readyAt = Date.now();
 
     return this.rateLimiter.execute(ApiType.CLOB_API, async () => {
+      const rateLimiterReadyAt = Date.now();
       try {
         const [tickSize, negRisk] = await Promise.all([
           params.tickSize ?? this.getTickSize(params.tokenId),
           params.negRisk ?? this.isNegRisk(params.tokenId),
         ]);
+        const metadataReadyAt = Date.now();
 
         const orderType = params.orderType === 'FAK' ? ClobOrderType.FAK : ClobOrderType.FOK;
 
         // V2 UserMarketOrder: same `tokenID` / `side` / `amount` / `price`
         // surface; `feeRateBps` / `nonce` / `taker` removed; `builder` and
         // `metadata` populated by the SDK from `builderConfig`.
-        const result = await client.createAndPostMarketOrder(
+        const signedOrder = await client.createMarketOrder(
           {
             tokenID: params.tokenId,
             side: params.side === 'BUY' ? ClobSide.BUY : ClobSide.SELL,
@@ -719,8 +815,27 @@ export class TradingService {
             price: params.price,
           },
           { tickSize, negRisk },
-          orderType
         );
+        const signedAt = Date.now();
+        const result = await client.postOrder(signedOrder, orderType);
+        const postedAt = Date.now();
+
+        this.diag.info('TradingService market order latency', {
+          tokenId: params.tokenId.slice(0, 12),
+          side: params.side,
+          orderType: params.orderType ?? 'FOK',
+          amount: params.amount,
+          price: params.price,
+          preRateMs: readyAt - startedAt,
+          rateWaitMs: rateLimiterReadyAt - readyAt,
+          metadataMs: metadataReadyAt - rateLimiterReadyAt,
+          signAndBuildMs: signedAt - metadataReadyAt,
+          postOrderMs: postedAt - signedAt,
+          totalMs: postedAt - startedAt,
+          success: result.success === true,
+          status: result.status,
+          orderId: result.orderID ? result.orderID.slice(0, 12) : undefined,
+        });
 
         // FOK/FAK orders can return an orderID for a terminal no-fill/killed
         // response. Treating orderID alone as success creates ghost open orders
