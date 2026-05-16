@@ -283,7 +283,7 @@ export interface OrderLatencyTelemetry {
   metadataMs?: number;
   signAndBuildMs?: number;
   postOrderMs?: number;
-  postTransport?: 'sdk_axios' | 'ee_fetch';
+  postTransport?: 'sdk_axios' | 'ee_fetch' | 'ee_https';
   postTimeoutMs?: number;
   postTimedOut?: boolean;
   postErrorCode?: string;
@@ -293,7 +293,7 @@ export interface OrderLatencyTelemetry {
 }
 
 interface ClobPostTelemetry {
-  transport: 'ee_fetch';
+  transport: 'ee_fetch' | 'ee_https';
   startedAt: number;
   endedAt: number;
   latencyMs: number;
@@ -660,27 +660,58 @@ export class TradingService {
     orderType?: string,
   ): Promise<any> {
     const startedAt = Date.now();
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
     const url = new URL(endpoint);
     for (const [key, value] of Object.entries(options.params ?? {})) {
       if (value !== undefined) url.searchParams.set(key, String(value));
     }
+    const payload = JSON.stringify(options.data ?? {});
+    const headers = {
+      'User-Agent': '@polymarket/clob-client',
+      Accept: '*/*',
+      'Content-Type': 'application/json',
+      Connection: 'keep-alive',
+      'Content-Length': Buffer.byteLength(payload).toString(),
+      ...(options.headers ?? {}),
+    };
 
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-          Connection: 'keep-alive',
-          ...(options.headers ?? {}),
-        },
-        body: JSON.stringify(options.data ?? {}),
-        signal: controller.signal,
+      const { statusCode, body: text } = await new Promise<{ statusCode: number; body: string }>((resolve, reject) => {
+        let timedOut = false;
+        const request = https.request(
+          url,
+          {
+            method: 'POST',
+            headers,
+            agent: https.globalAgent,
+          },
+          (response) => {
+            response.setEncoding('utf8');
+            let body = '';
+            response.on('data', (chunk) => {
+              body += chunk;
+            });
+            response.on('end', () => {
+              resolve({ statusCode: response.statusCode ?? 0, body });
+            });
+          },
+        );
+        const timeout = setTimeout(() => {
+          timedOut = true;
+          const error = new Error(`CLOB immediate order POST timed out after ${timeoutMs}ms`) as Error & { code?: string };
+          error.code = 'ETIMEDOUT';
+          request.destroy(error);
+        }, timeoutMs);
+        request.on('error', (error) => {
+          clearTimeout(timeout);
+          if (timedOut && 'code' in error && !error.code) {
+            (error as Error & { code?: string }).code = 'ETIMEDOUT';
+          }
+          reject(error);
+        });
+        request.on('close', () => clearTimeout(timeout));
+        request.write(payload);
+        request.end();
       });
-      const text = await response.text();
       const endedAt = Date.now();
       let body: any;
       try {
@@ -690,29 +721,27 @@ export class TradingService {
       }
 
       this.lastClobPostTelemetry = {
-        transport: 'ee_fetch',
+        transport: 'ee_https',
         startedAt,
         endedAt,
         latencyMs: endedAt - startedAt,
         timeoutMs,
         timedOut: false,
-        httpStatus: response.status,
+        httpStatus: statusCode,
         orderType,
       };
 
       if (body && typeof body === 'object' && body.status === undefined) {
-        body.status = response.status;
+        body.status = statusCode;
       }
       return body;
     } catch (error) {
       const endedAt = Date.now();
       const errorCode =
-        error instanceof DOMException
-          ? error.name
-          : (error instanceof Error && 'code' in error ? String((error as Error & { code?: string }).code) : undefined);
-      const timedOut = errorCode === 'AbortError';
+        error instanceof Error && 'code' in error ? String((error as Error & { code?: string }).code) : undefined;
+      const timedOut = errorCode === 'ETIMEDOUT';
       this.lastClobPostTelemetry = {
-        transport: 'ee_fetch',
+        transport: 'ee_https',
         startedAt,
         endedAt,
         latencyMs: endedAt - startedAt,
@@ -731,8 +760,6 @@ export class TradingService {
         code: errorCode,
         timeout: timedOut,
       };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
