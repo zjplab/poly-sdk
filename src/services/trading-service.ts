@@ -214,6 +214,14 @@ export interface PrepareMarketMetadataResult {
   errorMsg?: string;
 }
 
+export interface MarketFeeInfo {
+  /** CLOB market fee rate, e.g. 0.07 for crypto markets. */
+  rate: number;
+  /** Fee curve exponent from CLOB market info; current V2 markets use 1. */
+  exponent: number;
+  source: 'clob_market_info';
+}
+
 /** Parameters for clearing a token position (market sell) */
 export interface ClearPositionParams {
   tokenId: string;
@@ -863,6 +871,41 @@ export class TradingService {
       this.diag.warn('TradingService market metadata prepare failed', result);
       return result;
     }
+  }
+
+  /**
+   * Return the official per-market fee parameters cached by CLOB market info.
+   *
+   * Polymarket applies taker fees at match time. USER channel trade events can
+   * omit or zero `fee_rate_bps`, so latency-sensitive callers should preload
+   * CLOB market info once and use `fd.r/fd.e` for realtime wallet accounting,
+   * then reconcile against Data API / chain deltas after the run.
+   */
+  async getMarketFeeInfo(tokenId: string, conditionId?: string): Promise<MarketFeeInfo> {
+    const client = await this.ensureInitialized();
+    const rawClient = client as unknown as {
+      tokenConditionMap?: Record<string, string>;
+      feeInfos?: Record<string, { rate?: number; exponent?: number }>;
+      getClobMarketInfo?: (conditionId: string) => Promise<unknown>;
+    };
+
+    rawClient.tokenConditionMap ??= {};
+    if (conditionId) rawClient.tokenConditionMap[tokenId] = conditionId;
+
+    if (!rawClient.feeInfos?.[tokenId] && conditionId && rawClient.getClobMarketInfo) {
+      await rawClient.getClobMarketInfo(conditionId);
+    }
+
+    const info = rawClient.feeInfos?.[tokenId];
+    if (info?.rate != null && info?.exponent != null) {
+      return {
+        rate: Number(info.rate),
+        exponent: Number(info.exponent),
+        source: 'clob_market_info',
+      };
+    }
+
+    throw new Error(`failed to load market fee info for token ${tokenId}`);
   }
 
   // ============================================================================
