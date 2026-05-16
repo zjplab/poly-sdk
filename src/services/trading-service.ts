@@ -306,6 +306,7 @@ export interface OrderLatencyTelemetry {
   postErrorCode?: string;
   totalMs: number;
   httpStatus?: number;
+  clobStatus?: string;
   success?: boolean;
 }
 
@@ -1104,7 +1105,8 @@ export class TradingService {
           postTimedOut: postTelemetry?.timedOut,
           postErrorCode: postTelemetry?.errorCode,
           totalMs: postedAt - startedAt,
-          httpStatus: result.status ?? postTelemetry?.httpStatus,
+          httpStatus: postTelemetry?.httpStatus,
+          clobStatus: result.status,
           success: result.success === true,
         };
 
@@ -1125,7 +1127,7 @@ export class TradingService {
           postErrorCode: telemetry.postErrorCode,
           totalMs: telemetry.totalMs,
           success: result.success === true,
-          status: telemetry.httpStatus,
+          status: telemetry.clobStatus ?? telemetry.httpStatus,
           orderId: result.orderID ? result.orderID.slice(0, 12) : undefined,
         });
 
