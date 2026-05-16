@@ -283,9 +283,25 @@ export interface OrderLatencyTelemetry {
   metadataMs?: number;
   signAndBuildMs?: number;
   postOrderMs?: number;
+  postTransport?: 'sdk_axios' | 'ee_fetch';
+  postTimeoutMs?: number;
+  postTimedOut?: boolean;
+  postErrorCode?: string;
   totalMs: number;
   httpStatus?: number;
   success?: boolean;
+}
+
+interface ClobPostTelemetry {
+  transport: 'ee_fetch';
+  startedAt: number;
+  endedAt: number;
+  latencyMs: number;
+  timeoutMs: number;
+  timedOut: boolean;
+  httpStatus?: number;
+  errorCode?: string;
+  orderType?: string;
 }
 
 export interface TradeInfo {
@@ -434,6 +450,7 @@ export class TradingService {
   private initialized = false;
   private tickSizeCache: Map<string, string> = new Map();
   private negRiskCache: Map<string, boolean> = new Map();
+  private lastClobPostTelemetry: ClobPostTelemetry | undefined;
 
   private dataApi: DataApiClient | undefined;
 
@@ -522,6 +539,7 @@ export class TradingService {
       funderAddress: isBuilderMode ? this.config.safeAddress : undefined,
       builderConfig,
     });
+    this.installClobFastPost(this.clobClient);
 
     // PR-1: builderCode boot echo (fires once per TradingService init).
     this.diag.info('TradingService V2 initialized', {
@@ -588,6 +606,134 @@ export class TradingService {
       await this.initialize();
     }
     return this.clobClient!;
+  }
+
+  private readLastClobPostTelemetry(): ClobPostTelemetry | undefined {
+    return this.lastClobPostTelemetry;
+  }
+
+  private getImmediatePostTimeoutMs(): number {
+    const raw = process.env.POLY_CLOB_IMMEDIATE_POST_TIMEOUT_MS ?? '1500';
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed) || parsed <= 0) return 1500;
+    return Math.max(250, Math.min(10_000, Math.floor(parsed)));
+  }
+
+  private installClobFastPost(client: ClobClient): void {
+    const patchedClient = client as unknown as {
+      post?: (endpoint: string, options?: { headers?: Record<string, string>; data?: unknown; params?: Record<string, unknown> }, ipAddressHeaderRequired?: boolean) => Promise<unknown>;
+      __eeFastPostInstalled?: boolean;
+    };
+
+    if (patchedClient.__eeFastPostInstalled || typeof patchedClient.post !== 'function') return;
+
+    const originalPost = patchedClient.post.bind(patchedClient);
+    patchedClient.post = async (endpoint, options = {}, ipAddressHeaderRequired) => {
+      const data = options.data as { orderType?: string } | undefined;
+      const orderType = data?.orderType;
+      const isImmediateOrder =
+        endpoint.includes('/order') &&
+        (orderType === ClobOrderType.FAK || orderType === ClobOrderType.FOK);
+
+      if (!isImmediateOrder) {
+        return originalPost(endpoint, options, ipAddressHeaderRequired);
+      }
+
+      return this.postClobWithFetch(
+        endpoint,
+        {
+          headers: options.headers,
+          data: options.data,
+          params: options.params,
+        },
+        this.getImmediatePostTimeoutMs(),
+        orderType,
+      );
+    };
+    patchedClient.__eeFastPostInstalled = true;
+  }
+
+  private async postClobWithFetch(
+    endpoint: string,
+    options: { headers?: Record<string, string>; data?: unknown; params?: Record<string, unknown> },
+    timeoutMs: number,
+    orderType?: string,
+  ): Promise<any> {
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+    const url = new URL(endpoint);
+    for (const [key, value] of Object.entries(options.params ?? {})) {
+      if (value !== undefined) url.searchParams.set(key, String(value));
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          Connection: 'keep-alive',
+          ...(options.headers ?? {}),
+        },
+        body: JSON.stringify(options.data ?? {}),
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      const endedAt = Date.now();
+      let body: any;
+      try {
+        body = text ? JSON.parse(text) : {};
+      } catch {
+        body = { error: text };
+      }
+
+      this.lastClobPostTelemetry = {
+        transport: 'ee_fetch',
+        startedAt,
+        endedAt,
+        latencyMs: endedAt - startedAt,
+        timeoutMs,
+        timedOut: false,
+        httpStatus: response.status,
+        orderType,
+      };
+
+      if (body && typeof body === 'object' && body.status === undefined) {
+        body.status = response.status;
+      }
+      return body;
+    } catch (error) {
+      const endedAt = Date.now();
+      const errorCode =
+        error instanceof DOMException
+          ? error.name
+          : (error instanceof Error && 'code' in error ? String((error as Error & { code?: string }).code) : undefined);
+      const timedOut = errorCode === 'AbortError';
+      this.lastClobPostTelemetry = {
+        transport: 'ee_fetch',
+        startedAt,
+        endedAt,
+        latencyMs: endedAt - startedAt,
+        timeoutMs,
+        timedOut,
+        httpStatus: 0,
+        errorCode,
+        orderType,
+      };
+      return {
+        success: false,
+        status: 0,
+        errorMsg: timedOut
+          ? `CLOB immediate order POST timed out after ${timeoutMs}ms`
+          : `CLOB immediate order POST failed: ${error instanceof Error ? error.message : String(error)}`,
+        code: errorCode,
+        timeout: timedOut,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private seedClobClientMarketMetadata(
@@ -858,8 +1004,10 @@ export class TradingService {
           { tickSize, negRisk },
         );
         const signedAt = Date.now();
+        this.lastClobPostTelemetry = undefined;
         const result = await client.postOrder(signedOrder, orderType);
         const postedAt = Date.now();
+        const postTelemetry = this.readLastClobPostTelemetry();
         const telemetry: OrderLatencyTelemetry = {
           startedAt,
           readyAt,
@@ -872,8 +1020,12 @@ export class TradingService {
           metadataMs: metadataReadyAt - rateLimiterReadyAt,
           signAndBuildMs: signedAt - metadataReadyAt,
           postOrderMs: postedAt - signedAt,
+          postTransport: postTelemetry?.transport ?? 'sdk_axios',
+          postTimeoutMs: postTelemetry?.timeoutMs,
+          postTimedOut: postTelemetry?.timedOut,
+          postErrorCode: postTelemetry?.errorCode,
           totalMs: postedAt - startedAt,
-          httpStatus: result.status,
+          httpStatus: result.status ?? postTelemetry?.httpStatus,
           success: result.success === true,
         };
 
@@ -888,9 +1040,13 @@ export class TradingService {
           metadataMs: telemetry.metadataMs,
           signAndBuildMs: telemetry.signAndBuildMs,
           postOrderMs: telemetry.postOrderMs,
+          postTransport: telemetry.postTransport,
+          postTimeoutMs: telemetry.postTimeoutMs,
+          postTimedOut: telemetry.postTimedOut,
+          postErrorCode: telemetry.postErrorCode,
           totalMs: telemetry.totalMs,
           success: result.success === true,
-          status: result.status,
+          status: telemetry.httpStatus,
           orderId: result.orderID ? result.orderID.slice(0, 12) : undefined,
         });
 
@@ -916,6 +1072,7 @@ export class TradingService {
         };
       } catch (error) {
         const failedAt = Date.now();
+        const postTelemetry = this.readLastClobPostTelemetry();
         return {
           success: false,
           errorMsg: `Market order failed: ${error instanceof Error ? error.message : String(error)}`,
@@ -923,6 +1080,12 @@ export class TradingService {
             startedAt,
             readyAt,
             rateLimiterReadyAt,
+            postOrderMs: postTelemetry?.latencyMs,
+            postTransport: postTelemetry?.transport,
+            postTimeoutMs: postTelemetry?.timeoutMs,
+            postTimedOut: postTelemetry?.timedOut,
+            postErrorCode: postTelemetry?.errorCode,
+            httpStatus: postTelemetry?.httpStatus,
             totalMs: failedAt - startedAt,
             success: false,
           },
