@@ -269,6 +269,15 @@ export interface OrderResult {
   errorMsg?: string;
   transactionHashes?: string[];
   telemetry?: OrderLatencyTelemetry;
+  /**
+   * True when the order POST reached an indeterminate transport state.
+   *
+   * This is not a business reject. CLOB may still accept and match the signed
+   * order after the local HTTP request times out, so callers must reconcile via
+   * USER WS / Data API / positions before retrying the same intent.
+   */
+  unknown?: boolean;
+  postTimedOut?: boolean;
 }
 
 export interface OrderLatencyTelemetry {
@@ -613,9 +622,9 @@ export class TradingService {
   }
 
   private getImmediatePostTimeoutMs(): number {
-    const raw = process.env.POLY_CLOB_IMMEDIATE_POST_TIMEOUT_MS ?? '1500';
+    const raw = process.env.POLY_CLOB_IMMEDIATE_POST_TIMEOUT_MS ?? '3000';
     const parsed = Number(raw);
-    if (!Number.isFinite(parsed) || parsed <= 0) return 1500;
+    if (!Number.isFinite(parsed) || parsed <= 0) return 3000;
     return Math.max(250, Math.min(10_000, Math.floor(parsed)));
   }
 
@@ -1085,9 +1094,13 @@ export class TradingService {
         const isFokOrder = params.orderType !== 'FAK'; // default is FOK
         const success = result.success === true;
 
-        const errorMsg = !success
-          ? (result.errorMsg || `Market order ${isFokOrder ? 'FOK not filled' : 'FAK killed/no-fill'} (status: ${result.status ?? 'unknown'}, orderID: ${result.orderID ?? 'none'})`)
-          : result.errorMsg;
+        const postTimedOut = telemetry.postTimedOut === true || result.timeout === true;
+        const unknown = postTimedOut;
+        const errorMsg = unknown
+          ? (result.errorMsg || `CLOB immediate order POST outcome unknown after ${telemetry.postTimeoutMs ?? 'configured'}ms`)
+          : (!success
+            ? (result.errorMsg || `Market order ${isFokOrder ? 'FOK not filled' : 'FAK killed/no-fill'} (status: ${result.status ?? 'unknown'}, orderID: ${result.orderID ?? 'none'})`)
+            : result.errorMsg);
 
         return {
           success,
@@ -1096,13 +1109,18 @@ export class TradingService {
           errorMsg,
           transactionHashes: result.transactionsHashes,
           telemetry,
+          unknown,
+          postTimedOut,
         };
       } catch (error) {
         const failedAt = Date.now();
         const postTelemetry = this.readLastClobPostTelemetry();
+        const postTimedOut = postTelemetry?.timedOut === true;
         return {
           success: false,
           errorMsg: `Market order failed: ${error instanceof Error ? error.message : String(error)}`,
+          unknown: postTimedOut,
+          postTimedOut,
           telemetry: {
             startedAt,
             readyAt,
