@@ -268,6 +268,24 @@ export interface OrderResult {
   orderIds?: string[];
   errorMsg?: string;
   transactionHashes?: string[];
+  telemetry?: OrderLatencyTelemetry;
+}
+
+export interface OrderLatencyTelemetry {
+  startedAt: number;
+  readyAt?: number;
+  rateLimiterReadyAt?: number;
+  metadataReadyAt?: number;
+  signedAt?: number;
+  postedAt?: number;
+  preRateMs?: number;
+  rateWaitMs?: number;
+  metadataMs?: number;
+  signAndBuildMs?: number;
+  postOrderMs?: number;
+  totalMs: number;
+  httpStatus?: number;
+  success?: boolean;
 }
 
 export interface TradeInfo {
@@ -842,6 +860,22 @@ export class TradingService {
         const signedAt = Date.now();
         const result = await client.postOrder(signedOrder, orderType);
         const postedAt = Date.now();
+        const telemetry: OrderLatencyTelemetry = {
+          startedAt,
+          readyAt,
+          rateLimiterReadyAt,
+          metadataReadyAt,
+          signedAt,
+          postedAt,
+          preRateMs: readyAt - startedAt,
+          rateWaitMs: rateLimiterReadyAt - readyAt,
+          metadataMs: metadataReadyAt - rateLimiterReadyAt,
+          signAndBuildMs: signedAt - metadataReadyAt,
+          postOrderMs: postedAt - signedAt,
+          totalMs: postedAt - startedAt,
+          httpStatus: result.status,
+          success: result.success === true,
+        };
 
         this.diag.info('TradingService market order latency', {
           tokenId: params.tokenId.slice(0, 12),
@@ -849,12 +883,12 @@ export class TradingService {
           orderType: params.orderType ?? 'FOK',
           amount: params.amount,
           price: params.price,
-          preRateMs: readyAt - startedAt,
-          rateWaitMs: rateLimiterReadyAt - readyAt,
-          metadataMs: metadataReadyAt - rateLimiterReadyAt,
-          signAndBuildMs: signedAt - metadataReadyAt,
-          postOrderMs: postedAt - signedAt,
-          totalMs: postedAt - startedAt,
+          preRateMs: telemetry.preRateMs,
+          rateWaitMs: telemetry.rateWaitMs,
+          metadataMs: telemetry.metadataMs,
+          signAndBuildMs: telemetry.signAndBuildMs,
+          postOrderMs: telemetry.postOrderMs,
+          totalMs: telemetry.totalMs,
           success: result.success === true,
           status: result.status,
           orderId: result.orderID ? result.orderID.slice(0, 12) : undefined,
@@ -878,11 +912,20 @@ export class TradingService {
           orderIds: result.orderIDs,
           errorMsg,
           transactionHashes: result.transactionsHashes,
+          telemetry,
         };
       } catch (error) {
+        const failedAt = Date.now();
         return {
           success: false,
           errorMsg: `Market order failed: ${error instanceof Error ? error.message : String(error)}`,
+          telemetry: {
+            startedAt,
+            readyAt,
+            rateLimiterReadyAt,
+            totalMs: failedAt - startedAt,
+            success: false,
+          },
         };
       }
     });
