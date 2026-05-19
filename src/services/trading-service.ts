@@ -35,6 +35,7 @@ import {
   OrderType as ClobOrderType,
   Chain,
   SignatureTypeV2,
+  type SignedOrder,
   type OpenOrder,
   type Trade as ClobTrade,
   type TickSize,
@@ -295,6 +296,14 @@ export interface OrderLatencyTelemetry {
   metadataReadyAt?: number;
   signedAt?: number;
   postedAt?: number;
+  presignRequested?: boolean;
+  presignHit?: boolean;
+  presignKey?: string;
+  presignCreatedAt?: number;
+  presignAgeMs?: number;
+  presignBuildMs?: number;
+  presignSignMs?: number;
+  presignFallbackReason?: string;
   preRateMs?: number;
   rateWaitMs?: number;
   metadataMs?: number;
@@ -308,6 +317,50 @@ export interface OrderLatencyTelemetry {
   httpStatus?: number;
   clobStatus?: string;
   success?: boolean;
+}
+
+export interface TradingServiceWalletIdentity {
+  walletMode: 'builder_safe' | 'eoa';
+  maker: string;
+  signer: string;
+  funder?: string;
+  signatureType: number;
+  builderCode?: string;
+}
+
+export interface PresignedOrderFingerprint {
+  tokenId: string;
+  side: Side;
+  orderType: 'GTC' | 'GTD' | 'FOK' | 'FAK';
+  price?: number;
+  size?: number;
+  amount?: number;
+  expiration?: number;
+  tickSize?: TickSize;
+  negRisk?: boolean;
+  walletMode: string;
+  maker: string;
+  signer: string;
+  funder?: string;
+  signatureType: number;
+  builderCode?: string;
+}
+
+export interface PresignedOrder {
+  key: string;
+  kind: 'market' | 'limit';
+  orderType: 'GTC' | 'GTD' | 'FOK' | 'FAK';
+  signedOrder: SignedOrder;
+  fingerprint: PresignedOrderFingerprint;
+  createdAt: number;
+  expiresAt?: number;
+  telemetry: OrderLatencyTelemetry;
+  used?: boolean;
+}
+
+export interface PresignOptions {
+  key?: string;
+  ttlMs?: number;
 }
 
 interface ClobPostTelemetry {
@@ -624,6 +677,52 @@ export class TradingService {
       await this.initialize();
     }
     return this.clobClient!;
+  }
+
+  getWalletIdentity(): TradingServiceWalletIdentity {
+    const builderCode = this.config.builderCode !== undefined
+      ? this.config.builderCode
+      : readBuilderCodeOptional();
+    const isBuilderMode = !!builderCode && !!this.config.safeAddress;
+    const signer = this.wallet.address;
+    return {
+      walletMode: isBuilderMode ? 'builder_safe' : 'eoa',
+      maker: isBuilderMode ? this.config.safeAddress! : signer,
+      signer,
+      funder: isBuilderMode ? this.config.safeAddress : undefined,
+      signatureType: isBuilderMode ? SignatureTypeV2.POLY_GNOSIS_SAFE : SignatureTypeV2.EOA,
+      builderCode,
+    };
+  }
+
+  private createPresignKey(kind: 'market' | 'limit', tokenId: string, orderType: string): string {
+    return `${kind}:${tokenId}:${orderType}:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private createPresignedFingerprint(
+    params: MarketOrderParams | LimitOrderParams,
+    orderType: 'GTC' | 'GTD' | 'FOK' | 'FAK',
+    wallet: TradingServiceWalletIdentity,
+  ): PresignedOrderFingerprint {
+    const limitParams = params as LimitOrderParams;
+    const marketParams = params as MarketOrderParams;
+    return {
+      tokenId: params.tokenId,
+      side: params.side,
+      orderType,
+      price: params.price,
+      size: 'size' in params ? limitParams.size : undefined,
+      amount: 'amount' in params ? marketParams.amount : undefined,
+      expiration: 'expiration' in params ? limitParams.expiration : undefined,
+      tickSize: params.tickSize,
+      negRisk: params.negRisk,
+      walletMode: wallet.walletMode,
+      maker: wallet.maker,
+      signer: wallet.signer,
+      funder: wallet.funder,
+      signatureType: wallet.signatureType,
+      builderCode: wallet.builderCode,
+    };
   }
 
   private readLastClobPostTelemetry(): ClobPostTelemetry | undefined {
@@ -1034,6 +1133,72 @@ export class TradingService {
     });
   }
 
+  async presignLimitOrder(params: LimitOrderParams, options: PresignOptions = {}): Promise<PresignedOrder> {
+    const startedAt = Date.now();
+    const minOrderSize = params.minimumOrderSize ?? MIN_ORDER_SIZE_SHARES;
+    if (params.size < minOrderSize) {
+      throw new Error(`Order size (${params.size}) is below Polymarket minimum (${minOrderSize} shares)`);
+    }
+
+    const orderValue = params.price * params.size;
+    if (orderValue < MIN_ORDER_VALUE_USDC) {
+      throw new Error(`Order value ($${orderValue.toFixed(2)}) is below Polymarket minimum ($${MIN_ORDER_VALUE_USDC})`);
+    }
+
+    this.ensureBuilderCode();
+    const client = await this.ensureInitialized();
+    this.seedClobClientMarketMetadata(params.tokenId, {
+      tickSize: params.tickSize,
+      negRisk: params.negRisk,
+    });
+    const readyAt = Date.now();
+
+    const [tickSize, negRisk] = await Promise.all([
+      params.tickSize ?? this.getTickSize(params.tokenId),
+      params.negRisk ?? this.isNegRisk(params.tokenId),
+    ]);
+    const metadataReadyAt = Date.now();
+    const orderType = params.orderType === 'GTD' ? ClobOrderType.GTD : ClobOrderType.GTC;
+    const signedOrder = await client.createOrder(
+      {
+        tokenID: params.tokenId,
+        side: params.side === 'BUY' ? ClobSide.BUY : ClobSide.SELL,
+        price: params.price,
+        size: params.size,
+        expiration: params.expiration || 0,
+      },
+      { tickSize, negRisk },
+    );
+    const signedAt = Date.now();
+    const wallet = this.getWalletIdentity();
+    const key = options.key ?? this.createPresignKey('limit', params.tokenId, orderType);
+    return {
+      key,
+      kind: 'limit',
+      orderType,
+      signedOrder,
+      fingerprint: this.createPresignedFingerprint({ ...params, tickSize, negRisk }, orderType, wallet),
+      createdAt: signedAt,
+      expiresAt: options.ttlMs == null ? undefined : signedAt + options.ttlMs,
+      telemetry: {
+        startedAt,
+        readyAt,
+        metadataReadyAt,
+        signedAt,
+        presignRequested: true,
+        presignHit: false,
+        presignKey: key,
+        presignCreatedAt: signedAt,
+        presignBuildMs: signedAt - metadataReadyAt,
+        presignSignMs: signedAt - metadataReadyAt,
+        preRateMs: readyAt - startedAt,
+        metadataMs: metadataReadyAt - readyAt,
+        signAndBuildMs: signedAt - metadataReadyAt,
+        totalMs: signedAt - startedAt,
+      },
+    };
+  }
+
   /**
    * Create and post a market order
    *
@@ -1170,6 +1335,202 @@ export class TradingService {
             startedAt,
             readyAt,
             rateLimiterReadyAt,
+            postOrderMs: postTelemetry?.latencyMs,
+            postTransport: postTelemetry?.transport,
+            postTimeoutMs: postTelemetry?.timeoutMs,
+            postTimedOut: postTelemetry?.timedOut,
+            postErrorCode: postTelemetry?.errorCode,
+            httpStatus: postTelemetry?.httpStatus,
+            totalMs: failedAt - startedAt,
+            success: false,
+          },
+        };
+      }
+    });
+  }
+
+  async presignMarketOrder(params: MarketOrderParams, options: PresignOptions = {}): Promise<PresignedOrder> {
+    const startedAt = Date.now();
+    if (params.amount < MIN_ORDER_VALUE_USDC) {
+      throw new Error(`Order amount ($${params.amount.toFixed(2)}) is below Polymarket minimum ($${MIN_ORDER_VALUE_USDC})`);
+    }
+
+    this.ensureBuilderCode();
+    const client = await this.ensureInitialized();
+    this.seedClobClientMarketMetadata(params.tokenId, {
+      tickSize: params.tickSize,
+      negRisk: params.negRisk,
+    });
+    const readyAt = Date.now();
+
+    const [tickSize, negRisk] = await Promise.all([
+      params.tickSize ?? this.getTickSize(params.tokenId),
+      params.negRisk ?? this.isNegRisk(params.tokenId),
+    ]);
+    const metadataReadyAt = Date.now();
+    const orderType = params.orderType === 'FAK' ? ClobOrderType.FAK : ClobOrderType.FOK;
+    const signedOrder = await client.createMarketOrder(
+      {
+        tokenID: params.tokenId,
+        side: params.side === 'BUY' ? ClobSide.BUY : ClobSide.SELL,
+        amount: params.amount,
+        price: params.price,
+      },
+      { tickSize, negRisk },
+    );
+    const signedAt = Date.now();
+    const wallet = this.getWalletIdentity();
+    const key = options.key ?? this.createPresignKey('market', params.tokenId, orderType);
+    return {
+      key,
+      kind: 'market',
+      orderType,
+      signedOrder,
+      fingerprint: this.createPresignedFingerprint({ ...params, tickSize, negRisk }, orderType, wallet),
+      createdAt: signedAt,
+      expiresAt: options.ttlMs == null ? undefined : signedAt + options.ttlMs,
+      telemetry: {
+        startedAt,
+        readyAt,
+        metadataReadyAt,
+        signedAt,
+        presignRequested: true,
+        presignHit: false,
+        presignKey: key,
+        presignCreatedAt: signedAt,
+        presignBuildMs: signedAt - metadataReadyAt,
+        presignSignMs: signedAt - metadataReadyAt,
+        preRateMs: readyAt - startedAt,
+        metadataMs: metadataReadyAt - readyAt,
+        signAndBuildMs: signedAt - metadataReadyAt,
+        totalMs: signedAt - startedAt,
+      },
+    };
+  }
+
+  async postPresignedOrder(presigned: PresignedOrder): Promise<OrderResult> {
+    const startedAt = Date.now();
+    if (presigned.used) {
+      return {
+        success: false,
+        errorMsg: `Presigned order ${presigned.key} has already been used`,
+        telemetry: {
+          startedAt,
+          presignRequested: true,
+          presignHit: false,
+          presignKey: presigned.key,
+          presignCreatedAt: presigned.createdAt,
+          presignAgeMs: startedAt - presigned.createdAt,
+          presignFallbackReason: 'already_used',
+          totalMs: 0,
+          success: false,
+        },
+      };
+    }
+    if (presigned.expiresAt != null && presigned.expiresAt <= startedAt) {
+      return {
+        success: false,
+        errorMsg: `Presigned order ${presigned.key} expired`,
+        telemetry: {
+          startedAt,
+          presignRequested: true,
+          presignHit: false,
+          presignKey: presigned.key,
+          presignCreatedAt: presigned.createdAt,
+          presignAgeMs: startedAt - presigned.createdAt,
+          presignFallbackReason: 'expired',
+          totalMs: 0,
+          success: false,
+        },
+      };
+    }
+
+    this.ensureBuilderCode();
+    const client = await this.ensureInitialized();
+    const readyAt = Date.now();
+    return this.rateLimiter.execute(ApiType.CLOB_API, async () => {
+      const rateLimiterReadyAt = Date.now();
+      try {
+        this.lastClobPostTelemetry = undefined;
+        presigned.used = true;
+        const result = await client.postOrder(presigned.signedOrder, presigned.orderType as ClobOrderType);
+        const postedAt = Date.now();
+        const postTelemetry = this.readLastClobPostTelemetry();
+        const telemetry: OrderLatencyTelemetry = {
+          startedAt,
+          readyAt,
+          rateLimiterReadyAt,
+          postedAt,
+          presignRequested: true,
+          presignHit: true,
+          presignKey: presigned.key,
+          presignCreatedAt: presigned.createdAt,
+          presignAgeMs: startedAt - presigned.createdAt,
+          presignBuildMs: presigned.telemetry.presignBuildMs ?? presigned.telemetry.signAndBuildMs,
+          presignSignMs: presigned.telemetry.presignSignMs,
+          preRateMs: readyAt - startedAt,
+          rateWaitMs: rateLimiterReadyAt - readyAt,
+          signAndBuildMs: 0,
+          postOrderMs: postedAt - rateLimiterReadyAt,
+          postTransport: postTelemetry?.transport ?? 'sdk_axios',
+          postTimeoutMs: postTelemetry?.timeoutMs,
+          postTimedOut: postTelemetry?.timedOut,
+          postErrorCode: postTelemetry?.errorCode,
+          totalMs: postedAt - startedAt,
+          httpStatus: postTelemetry?.httpStatus,
+          clobStatus: result.status,
+          success: result.success === true,
+        };
+        if (presigned.kind === 'market') {
+          const success = result.success === true;
+          const postTimedOut = telemetry.postTimedOut === true || result.timeout === true;
+          const unknown = postTimedOut;
+          const errorMsg = unknown
+            ? (result.errorMsg || `CLOB immediate order POST outcome unknown after ${telemetry.postTimeoutMs ?? 'configured'}ms`)
+            : (!success
+              ? (result.errorMsg || `Market order ${presigned.orderType === 'FOK' ? 'FOK not filled' : 'FAK killed/no-fill'} (status: ${result.status ?? 'unknown'}, orderID: ${result.orderID ?? 'none'})`)
+              : result.errorMsg);
+          return {
+            success,
+            orderId: result.orderID,
+            orderIds: result.orderIDs,
+            errorMsg,
+            transactionHashes: result.transactionsHashes,
+            telemetry,
+            unknown,
+            postTimedOut,
+          };
+        }
+        const success = result.success === true ||
+          (result.success !== false && result.orderID !== undefined && result.orderID !== '');
+        return {
+          success,
+          orderId: result.orderID,
+          orderIds: result.orderIDs,
+          errorMsg: !success
+            ? (result.errorMsg || `Limit order rejected (status: ${result.status ?? 'unknown'}, response: ${JSON.stringify(result)})`)
+            : result.errorMsg,
+          transactionHashes: result.transactionsHashes,
+          telemetry,
+        };
+      } catch (error) {
+        const failedAt = Date.now();
+        const postTelemetry = this.readLastClobPostTelemetry();
+        const postTimedOut = postTelemetry?.timedOut === true;
+        return {
+          success: false,
+          errorMsg: `Presigned order POST failed: ${error instanceof Error ? error.message : String(error)}`,
+          unknown: postTimedOut,
+          postTimedOut,
+          telemetry: {
+            startedAt,
+            readyAt,
+            rateLimiterReadyAt,
+            presignRequested: true,
+            presignHit: true,
+            presignKey: presigned.key,
+            presignCreatedAt: presigned.createdAt,
+            presignAgeMs: startedAt - presigned.createdAt,
             postOrderMs: postTelemetry?.latencyMs,
             postTransport: postTelemetry?.transport,
             postTimeoutMs: postTelemetry?.timeoutMs,
