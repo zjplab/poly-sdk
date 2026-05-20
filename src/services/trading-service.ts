@@ -87,6 +87,13 @@ function configureClobHttpKeepAlive(logger: Logger): void {
   });
 }
 
+function signatureTypeName(value: number | undefined): string {
+  if (value === SignatureTypeV2.POLY_GNOSIS_SAFE) return 'POLY_GNOSIS_SAFE';
+  if (value === SignatureTypeV2.POLY_1271) return 'POLY_1271';
+  if (value === SignatureTypeV2.EOA || value == null) return 'EOA';
+  return String(value);
+}
+
 // ============================================================================
 // Polymarket Order Minimums
 // ============================================================================
@@ -150,6 +157,17 @@ export interface TradingServiceConfig {
    * signature type to `POLY_GNOSIS_SAFE` (matches V1 behaviour).
    */
   safeAddress?: string;
+  /**
+   * Explicit CLOB wallet mode for non-Safe accounts. Builder/Safe remains the
+   * default when `safeAddress` is present. Deposit wallet mode signs with the
+   * owner EOA and uses the derived deposit wallet as maker/funder with
+   * POLY_1271 signatures.
+   */
+  walletMode?: 'builder_safe' | 'eoa' | 'deposit_wallet';
+  /** Explicit CLOB signature type override, used by deposit-wallet probes. */
+  signatureType?: number;
+  /** Explicit maker/funder address override, used by deposit-wallet probes. */
+  funderAddress?: string;
   /** Data API client — required for clearPosition() to fetch size internally */
   dataApi?: DataApiClient;
   /**
@@ -320,7 +338,7 @@ export interface OrderLatencyTelemetry {
 }
 
 export interface TradingServiceWalletIdentity {
-  walletMode: 'builder_safe' | 'eoa';
+  walletMode: 'builder_safe' | 'eoa' | 'deposit_wallet';
   maker: string;
   signer: string;
   funder?: string;
@@ -564,10 +582,12 @@ export class TradingService {
         ? this.config.builderCode
         : readBuilderCodeOptional();
 
-    // Builder mode: orders use Safe as maker, signed by EOA owner. In V2 the
-    // trigger is `safeAddress` set together with a builder code — HMAC creds
-    // are no longer involved in this branch.
-    const isBuilderMode = !!resolvedBuilderCode && !!this.config.safeAddress;
+    // Builder mode: orders use Safe as maker, signed by EOA owner. Deposit
+    // wallet mode signs with the owner EOA and uses the derived deposit wallet
+    // as maker/funder under POLY_1271.
+    const configuredWalletMode = this.resolveWalletMode(resolvedBuilderCode);
+    const funderAddress = this.resolveFunderAddress(configuredWalletMode);
+    const signatureType = this.resolveSignatureType(configuredWalletMode);
     const builderConfig = resolvedBuilderCode
       ? { builderCode: resolvedBuilderCode }
       : undefined;
@@ -606,8 +626,8 @@ export class TradingService {
         secret: this.credentials.secret,
         passphrase: this.credentials.passphrase,
       },
-      signatureType: isBuilderMode ? SignatureTypeV2.POLY_GNOSIS_SAFE : undefined,
-      funderAddress: isBuilderMode ? this.config.safeAddress : undefined,
+      signatureType,
+      funderAddress,
       builderConfig,
     });
     this.installClobFastPost(this.clobClient);
@@ -619,8 +639,9 @@ export class TradingService {
       builder_attribution: builderConfig?.builderCode === '0x0000000000000000000000000000000000000000000000000000000000000000'
         ? 'zero_no_rewards'
         : (builderConfig?.builderCode ? 'set' : 'absent'),
-      signature_type: isBuilderMode ? 'POLY_GNOSIS_SAFE' : 'EOA',
-      funder_address: this.config.safeAddress ?? '(EOA-self)',
+      signature_type: signatureTypeName(signatureType),
+      wallet_mode: configuredWalletMode,
+      funder_address: funderAddress ?? '(EOA-self)',
     });
 
     // PR-4: EIP-712 V2 domain echo (constants inlined for log clarity / drift detection).
@@ -683,16 +704,36 @@ export class TradingService {
     const builderCode = this.config.builderCode !== undefined
       ? this.config.builderCode
       : readBuilderCodeOptional();
-    const isBuilderMode = !!builderCode && !!this.config.safeAddress;
+    const walletMode = this.resolveWalletMode(builderCode);
     const signer = this.wallet.address;
+    const funder = this.resolveFunderAddress(walletMode);
     return {
-      walletMode: isBuilderMode ? 'builder_safe' : 'eoa',
-      maker: isBuilderMode ? this.config.safeAddress! : signer,
+      walletMode,
+      maker: funder ?? signer,
       signer,
-      funder: isBuilderMode ? this.config.safeAddress : undefined,
-      signatureType: isBuilderMode ? SignatureTypeV2.POLY_GNOSIS_SAFE : SignatureTypeV2.EOA,
+      funder,
+      signatureType: this.resolveSignatureType(walletMode),
       builderCode,
     };
+  }
+
+  private resolveWalletMode(builderCode?: string): 'builder_safe' | 'eoa' | 'deposit_wallet' {
+    if (this.config.walletMode) return this.config.walletMode;
+    if (builderCode && this.config.safeAddress) return 'builder_safe';
+    return 'eoa';
+  }
+
+  private resolveFunderAddress(walletMode: 'builder_safe' | 'eoa' | 'deposit_wallet'): string | undefined {
+    if (this.config.funderAddress) return this.config.funderAddress;
+    if (walletMode === 'builder_safe') return this.config.safeAddress;
+    return undefined;
+  }
+
+  private resolveSignatureType(walletMode: 'builder_safe' | 'eoa' | 'deposit_wallet'): number {
+    if (this.config.signatureType != null) return this.config.signatureType;
+    if (walletMode === 'builder_safe') return SignatureTypeV2.POLY_GNOSIS_SAFE;
+    if (walletMode === 'deposit_wallet') return SignatureTypeV2.POLY_1271;
+    return SignatureTypeV2.EOA;
   }
 
   private createPresignKey(kind: 'market' | 'limit', tokenId: string, orderType: string): string {

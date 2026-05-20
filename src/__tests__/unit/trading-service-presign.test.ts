@@ -109,5 +109,23 @@ describe('TradingService presigned orders', () => {
     expect(second.errorMsg).toMatch(/already been used/);
     expect(postOrder).toHaveBeenCalledTimes(1);
   });
-});
 
+  it('fingerprints deposit-wallet identity with POLY_1271 maker/funder', () => {
+    const depositWallet = '0x' + 'd'.repeat(40);
+    const service = new TradingService(new RateLimiter(), createUnifiedCache(), {
+      privateKey: VALID_PK,
+      builderCode: VALID_BUILDER_CODE,
+      walletMode: 'deposit_wallet',
+      signatureType: 3,
+      funderAddress: depositWallet,
+    });
+
+    const identity = service.getWalletIdentity();
+
+    expect(identity.walletMode).toBe('deposit_wallet');
+    expect(identity.maker).toBe(depositWallet);
+    expect(identity.funder).toBe(depositWallet);
+    expect(identity.signatureType).toBe(3);
+    expect(identity.builderCode).toBe(VALID_BUILDER_CODE);
+  });
+});
