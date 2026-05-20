@@ -725,7 +725,15 @@ export class TradingService {
 
   private resolveFunderAddress(walletMode: 'builder_safe' | 'eoa' | 'deposit_wallet'): string | undefined {
     if (this.config.funderAddress) return this.config.funderAddress;
-    if (walletMode === 'builder_safe') return this.config.safeAddress;
+    if (walletMode === 'builder_safe') {
+      if (!this.config.safeAddress) {
+        throw new Error('builder_safe wallet mode requires safeAddress or funderAddress');
+      }
+      return this.config.safeAddress;
+    }
+    if (walletMode === 'deposit_wallet') {
+      throw new Error('deposit_wallet wallet mode requires funderAddress');
+    }
     return undefined;
   }
 

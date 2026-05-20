@@ -128,4 +128,14 @@ describe('TradingService presigned orders', () => {
     expect(identity.signatureType).toBe(3);
     expect(identity.builderCode).toBe(VALID_BUILDER_CODE);
   });
+
+  it('rejects deposit-wallet mode without an explicit maker/funder', () => {
+    const service = new TradingService(new RateLimiter(), createUnifiedCache(), {
+      privateKey: VALID_PK,
+      builderCode: VALID_BUILDER_CODE,
+      walletMode: 'deposit_wallet',
+    });
+
+    expect(() => service.getWalletIdentity()).toThrow(/deposit_wallet wallet mode requires funderAddress/);
+  });
 });
