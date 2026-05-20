@@ -367,6 +367,10 @@ export type {
   ApiCredentials,
   LimitOrderParams,
   MarketOrderParams,
+  PresignedOrder,
+  PresignedOrderFingerprint,
+  PresignOptions,
+  TradingServiceWalletIdentity,
   ClearPositionParams,
   // Results
   Order,
