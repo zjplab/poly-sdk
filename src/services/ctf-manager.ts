@@ -28,11 +28,11 @@
  *
  * // Listen to real-time CTF events
  * ctfMgr.on('split_detected', (event) => {
- *   console.log(`Split: ${event.amount} USDC → tokens`);
+ *   console.log(`Split: ${event.amount} pUSD → tokens`);
  * });
  *
  * ctfMgr.on('merge_detected', (event) => {
- *   console.log(`Merge: ${event.amount} tokens → USDC`);
+ *   console.log(`Merge: ${event.amount} tokens → pUSD`);
  * });
  *
  * ctfMgr.on('redeem_detected', (event) => {
@@ -82,7 +82,7 @@ export interface CTFManagerConfig {
 export type CTFOperationType = 'split' | 'merge' | 'redeem';
 
 /**
- * Split event (USDC → YES + NO tokens)
+ * Split event (pUSD → YES + NO tokens)
  */
 export interface SplitEvent {
   type: 'split';
@@ -97,7 +97,7 @@ export interface SplitEvent {
 }
 
 /**
- * Merge event (YES + NO tokens → USDC)
+ * Merge event (YES + NO tokens → pUSD)
  */
 export interface MergeEvent {
   type: 'merge';
@@ -112,7 +112,7 @@ export interface MergeEvent {
 }
 
 /**
- * Redeem event (Winning tokens → USDC)
+ * Redeem event (Winning tokens → pUSD)
  */
 export interface RedeemEvent {
   type: 'redeem';
@@ -271,7 +271,7 @@ export class CTFManager extends EventEmitter {
   // ============================================================================
 
   /**
-   * Split USDC into YES + NO tokens
+   * Split pUSD into YES + NO tokens
    * Transaction is automatically tracked via on-chain events
    */
   async split(amount: string): Promise<SplitResult> {
@@ -279,7 +279,7 @@ export class CTFManager extends EventEmitter {
       throw new Error('CTFManager not initialized. Call start() first.');
     }
 
-    this.log(`Splitting ${amount} USDC...`);
+    this.log(`Splitting ${amount} pUSD...`);
 
     const tokenIds = {
       yesTokenId: this.config.primaryTokenId,
@@ -302,7 +302,7 @@ export class CTFManager extends EventEmitter {
   }
 
   /**
-   * Merge YES + NO tokens into USDC
+   * Merge YES + NO tokens into pUSD
    * Transaction is automatically tracked via on-chain events
    */
   async merge(amount: string): Promise<MergeResult> {
@@ -333,7 +333,7 @@ export class CTFManager extends EventEmitter {
   }
 
   /**
-   * Redeem winning tokens for USDC (after market resolution)
+   * Redeem winning tokens for pUSD (after market resolution)
    * Transaction is automatically tracked via on-chain events
    */
   async redeem(outcome?: string): Promise<RedeemResult> {
@@ -493,7 +493,7 @@ export class CTFManager extends EventEmitter {
       const block = await event.getBlock();
       const timestamp = block.timestamp * 1000; // Convert to ms
 
-      // Convert amount from wei to USDC (6 decimals)
+      // Convert amount from base units to pUSD (6 decimals)
       const amountStr = ethers.utils.formatUnits(amount, 6);
 
       const splitEvent: SplitEvent = {
@@ -508,7 +508,7 @@ export class CTFManager extends EventEmitter {
         timestamp,
       };
 
-      this.log(`[CTF Event] Split detected: ${amountStr} USDC`);
+      this.log(`[CTF Event] Split detected: ${amountStr} pUSD`);
       this.emit('split_detected', splitEvent);
       this.emit('operation_detected', splitEvent);
     } catch (error) {
@@ -556,7 +556,7 @@ export class CTFManager extends EventEmitter {
       const block = await event.getBlock();
       const timestamp = block.timestamp * 1000; // Convert to ms
 
-      // Convert amount from wei to USDC (6 decimals)
+      // Convert amount from base units to pUSD (6 decimals)
       const amountStr = ethers.utils.formatUnits(amount, 6);
 
       const mergeEvent: MergeEvent = {
@@ -571,7 +571,7 @@ export class CTFManager extends EventEmitter {
         timestamp,
       };
 
-      this.log(`[CTF Event] Merge detected: ${amountStr} USDC`);
+      this.log(`[CTF Event] Merge detected: ${amountStr} pUSD`);
       this.emit('merge_detected', mergeEvent);
       this.emit('operation_detected', mergeEvent);
     } catch (error) {
@@ -620,7 +620,7 @@ export class CTFManager extends EventEmitter {
       const block = await event.getBlock();
       const timestamp = block.timestamp * 1000; // Convert to ms
 
-      // Convert payout from wei to USDC (6 decimals)
+      // Convert payout from base units to pUSD (6 decimals)
       const payoutStr = ethers.utils.formatUnits(payout, 6);
 
       // Determine which token was redeemed based on indexSets
@@ -641,7 +641,7 @@ export class CTFManager extends EventEmitter {
         timestamp,
       };
 
-      this.log(`[CTF Event] Redeem detected: ${payoutStr} USDC (token ${winningTokenId})`);
+      this.log(`[CTF Event] Redeem detected: ${payoutStr} pUSD (token ${winningTokenId})`);
       this.emit('redeem_detected', redeemEvent);
       this.emit('operation_detected', redeemEvent);
     } catch (error) {

@@ -11,10 +11,10 @@
  *
  * Operations:
  * - deploySafe: Deploy Gnosis Safe smart contract wallet
- * - approveUsdc: Approve USDC.e for CTF operations
- * - split: USDC → YES + NO tokens
- * - merge: YES + NO → USDC
- * - redeem: Winning tokens → USDC
+ * - approveUsdc: Approve pUSD for trading or USDC.e for onramp wrapping
+ * - split: pUSD -> YES + NO tokens
+ * - merge: YES + NO -> pUSD
+ * - redeem: Winning tokens -> pUSD
  *
  * Based on: @polymarket/builder-relayer-client v0.0.8
  */
@@ -83,7 +83,7 @@ export interface SafeDeployResult extends RelayerResult {
  * helpers (`approveUsdc` to the Onramp, `transferUsdc` for fund-out collect).
  *
  * Trading-related helpers (`split`, `merge`, `redeem`, `redeemBatch`) do not
- * accept this type — they hardcode pUSD as the post-V2 collateral.
+ * accept this type: they hardcode pUSD as the post-V2 collateral.
  */
 export type CollateralToken = 'pUSD' | 'USDC.e';
 
@@ -623,12 +623,11 @@ export class RelayerService {
   }
 
   /**
-   * Merge YES + NO tokens back to the underlying CTF collateral (gasless).
+   * Merge YES + NO tokens back to pUSD collateral (gasless).
    *
-   * V2 CLOB trading uses pUSD as the wrapped trading balance, but the
-   * conditional tokens are registered against USDC.e collateral. Using pUSD
-   * here creates a Safe request that the relayer marks failed without an
-   * on-chain tx hash.
+   * V2 CLOB trading and CTF operations are modeled as pUSD collateral. USDC.e
+   * remains an onramp/offramp rail and is not used as the merge collateral
+   * argument here.
    *
    * @param conditionId - Market condition ID
    * @param amount      - Number of token pairs to merge (e.g., "100" for
@@ -645,7 +644,7 @@ export class RelayerService {
     const ctfInterface = new ethers.utils.Interface(CTF_ABI);
 
     const data = ctfInterface.encodeFunctionData('mergePositions', [
-      POLYGON_CONTRACTS_V2.usdcE,
+      POLYGON_CONTRACTS_V2.pUSD,
       ethers.constants.HashZero,
       conditionId,
       [1, 2],
@@ -685,8 +684,8 @@ export class RelayerService {
   /**
    * Redeem winning tokens back to pUSD collateral (gasless).
    *
-   * V2 markets settle in pUSD only. NegRisk adapter doesn't take a
-   * collateral argument on-chain (it reads the market's collateral itself).
+   * V2 markets settle in pUSD. NegRisk adapter doesn't take a collateral
+   * argument on-chain (it reads the market's collateral itself).
    *
    * @param conditionId - Market condition ID
    * @param outcome     - Winning outcome ('YES' or 'NO')
@@ -714,17 +713,10 @@ export class RelayerService {
       to = NEG_RISK_ADAPTER;
     } else {
       // Standard CTF: redeemPositions(collateral, parentCollectionId, conditionId, indexSets)
-      // 2026-05-10: V2 binary CTF markets are still registered with USDC.e as the
-      // underlying collateral (pUSD is the trading wrapper, but the conditional
-      // splits/merges happen at the USDC.e layer). Using pUSD here causes the Safe
-      // call to revert with no on-chain tx (relay returns STATE_FAILED + empty hash).
-      // Empirical proof: probe-relayer-failure.ts experiment 2026-05-10 showed
-      // USDC.e param succeeded (tx 0x488dba6868...) where pUSD param failed across
-      // [1] / [1,2] index sets and NegRiskAdapter.
       const indexSets = outcome === 'YES' ? [1] : [2];
       const ctfInterface = new ethers.utils.Interface(CTF_ABI);
       data = ctfInterface.encodeFunctionData('redeemPositions', [
-        POLYGON_CONTRACTS_V2.usdcE,
+        POLYGON_CONTRACTS_V2.pUSD,
         ethers.constants.HashZero,
         conditionId,
         indexSets,
@@ -847,11 +839,9 @@ export class RelayerService {
         data = negRiskInterface.encodeFunctionData('redeemPositions', [conditionId, amounts]);
         to = NEG_RISK_ADAPTER;
       } else {
-        // 2026-05-10 (B14): V2 standard CTF redeem uses USDC.e collateral.
-        // See task-polymarket-v2-redeem-investigation/4-redeem/gap-analysis.md
         const indexSets = outcome === 'YES' ? [1] : [2];
         data = ctfInterface.encodeFunctionData('redeemPositions', [
-          POLYGON_CONTRACTS_V2.usdcE,
+          POLYGON_CONTRACTS_V2.pUSD,
           ethers.constants.HashZero,
           conditionId,
           indexSets,

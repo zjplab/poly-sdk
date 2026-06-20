@@ -45,7 +45,8 @@ const markets = await sdk.gammaApi.getTrendingMarkets(10);
 // Get orderbook for a specific market
 const orderbook = await sdk.clobApi.getProcessedOrderbook(markets[0].conditionId);
 
-console.log('Long arb profit:', orderbook.summary.longArbProfit);
+// Legacy gross signal. Use fee-aware helpers before execution.
+console.log('Gross long arb profit:', orderbook.summary.longArbProfit);
 ```
 
 ---
@@ -139,17 +140,17 @@ console.log('Spread:', orderbook.asks[0]?.price - orderbook.bids[0]?.price);
 
 ##### `getProcessedOrderbook(conditionId: string): Promise<ProcessedOrderbook>`
 
-Get processed orderbook with complete market analysis and arbitrage calculations.
+Get processed orderbook with complete market analysis and gross arbitrage calculations.
 
 ```typescript
 const processed = await client.getProcessedOrderbook('0x82ace55...');
 
-// Check for arbitrage
+// Gross screen only. Fees are not included here.
 if (processed.summary.longArbProfit > 0.003) {
-  console.log('Long arb opportunity!');
+  console.log('Gross long arb candidate');
   console.log('Buy YES @', processed.summary.effectivePrices.effectiveBuyYes);
   console.log('Buy NO @', processed.summary.effectivePrices.effectiveBuyNo);
-  console.log('Profit:', processed.summary.longArbProfit * 100, '%');
+  console.log('Gross profit:', processed.summary.longArbProfit * 100, '%');
 }
 ```
 
@@ -158,11 +159,13 @@ if (processed.summary.longArbProfit > 0.003) {
 
 **Returns:** `ProcessedOrderbook` with both YES/NO books and analytics
 
+**Fee note:** `longArbProfit` and `shortArbProfit` are gross values. Use `MarketService.getFeeAwareProcessedOrderbook()`, `MarketService.detectArbitrageNet()`, or `TradingService.estimateBinaryArbitrageFees()` before alerting or execution.
+
 **Important Notes:**
 
 Polymarket orderbooks have a mirroring property:
 - Buying YES @ P = Selling NO @ (1-P)
-- The same order appears in both books
+- Complementary liquidity can be matched through the opposite outcome view
 
 Correct arbitrage calculation uses "effective prices":
 - `effectiveBuyYes = min(YES.ask, 1 - NO.bid)`
@@ -359,7 +362,7 @@ Create and post a market order.
 const result = await client.createMarketOrder({
   tokenId: '21742633...',
   side: 'BUY',
-  amount: 50,  // $50 USDC
+  amount: 50,  // $50 pUSD notional
   orderType: 'FOK',  // Fill-or-kill
 });
 ```
@@ -580,7 +583,7 @@ const amount = utils.parseUnits('5.0', 6); // 5 USDC
 const tx = await nativeUsdc.transfer(depositAddress, amount);
 await tx.wait();
 
-console.log('Deposit sent! Bridge will convert to USDC.e in 1-5 minutes.');
+console.log('Deposit sent. Ensure the Polymarket account has pUSD before V2 trading.');
 console.log('Bridge fee: ~0.16%');
 ```
 
@@ -602,18 +605,19 @@ const ctf = new CTFClient({
 
 #### Core Concepts
 
-**Token IDs**: Each market has two token IDs (YES and NO). There are two ways to identify tokens:
-1. **CLOB Token IDs**: From the CLOB API, used for trading
-2. **Calculated Position IDs**: From `calculatePositionId()`, derived from conditionId
+**Token IDs**: Each binary market has two outcome token IDs. In current Polymarket docs, `tokenId`, `assetId`, and CTF `positionId` all refer to the ERC-1155 outcome token ID.
 
-**Important**: Always use CLOB Token IDs for balance queries. The calculated position IDs may differ.
+**Important**: Prefer token IDs returned by Gamma/CLOB APIs for SDK workflows. Hand-calculating position IDs is valid only when collateral token, oracle, question ID, condition ID, and index set are all known for the correct V2 context.
 
 #### Constants
 
 ```typescript
 import {
   CTF_CONTRACT,         // 0x4D97DCd97eC945f40cF65F87097ACe5EA0476045
-  USDC_CONTRACT,        // 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 (USDC.e)
+  PUSD_CONTRACT,        // 0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB
+  COLLATERAL_CONTRACT,  // Alias for PUSD_CONTRACT
+  USDC_E_CONTRACT,      // 0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174 (onramp/offramp)
+  USDC_CONTRACT,        // Deprecated alias for PUSD_CONTRACT
   NEG_RISK_CTF_EXCHANGE, // 0xC5d563A36AE78145C45a50134d48A1215220f80a
   NEG_RISK_ADAPTER,     // 0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296
   USDC_DECIMALS,        // 6
@@ -624,10 +628,10 @@ import {
 
 ##### `split(conditionId: string, amount: number): Promise<SplitResult>`
 
-Split USDC.e into YES + NO tokens.
+Split pUSD into YES + NO tokens.
 
 ```typescript
-// Split 10 USDC.e into 10 YES + 10 NO
+// Split 10 pUSD into 10 YES + 10 NO
 const result = await ctf.split('0xabc123...', 10);
 
 console.log(`TX: ${result.txHash}`);
@@ -638,14 +642,14 @@ console.log(`Status: ${result.status}`);
 
 ##### `merge(conditionId: string, amount: number): Promise<MergeResult>`
 
-Merge YES + NO tokens back into USDC.e.
+Merge YES + NO tokens back into pUSD.
 
 ```typescript
-// Merge 10 YES + 10 NO into 10 USDC.e
+// Merge 10 YES + 10 NO into 10 pUSD
 const result = await ctf.merge('0xabc123...', 10);
 
 console.log(`TX: ${result.txHash}`);
-console.log(`USDC received: ${result.usdcReceived}`);
+console.log(`pUSD received: ${result.usdcReceived}`);
 ```
 
 ---
@@ -690,7 +694,7 @@ if (canMerge) {
 
 ##### `getPositionBalance(conditionId: string): Promise<PositionBalance>` _(deprecated)_
 
-> **Deprecated**: Use `getPositionBalanceByTokenIds()` instead. This method uses calculated position IDs which may not match CLOB token IDs.
+> **Deprecated**: Use `getPositionBalanceByTokenIds()` instead. This method hand-calculates position IDs and is easier to misuse when V2 collateral or market metadata are wrong.
 
 ---
 
@@ -725,7 +729,7 @@ const tokenIds: TokenIds = {
 
 const result = await ctf.redeemByTokenIds(conditionId, tokenIds);
 console.log(`Redeemed ${result.tokensRedeemed} ${result.outcome} tokens`);
-console.log(`Received ${result.usdcReceived} USDC`);
+console.log(`Received ${result.usdcReceived} pUSD`);
 ```
 
 **Parameters:**
@@ -736,9 +740,9 @@ console.log(`Received ${result.usdcReceived} USDC`);
 **Returns:** `RedeemResult` with transaction details
 
 **Why use this method?**
-- Polymarket wraps CTF positions into ERC-1155 tokens with custom IDs
-- The token IDs from CLOB API differ from calculated position IDs
-- This method queries balances using the correct Polymarket token IDs
+- It uses the token IDs already returned by the market APIs
+- It avoids local mistakes in collateral, condition, oracle, question, and index-set inputs
+- It keeps SDK code aligned with CLOB/Gamma market metadata
 
 ---
 
@@ -755,14 +759,22 @@ if (resolution.isResolved) {
 
 ---
 
-##### `getUsdcBalance(): Promise<string>`
+##### `getPusdBalance(): Promise<string>`
 
-Get USDC.e balance.
+Get pUSD balance, the V2 trading collateral.
 
 ```typescript
-const balance = await ctf.getUsdcBalance();
-console.log(`USDC.e: ${balance}`);
+const balance = await ctf.getPusdBalance();
+console.log(`pUSD: ${balance}`);
 ```
+
+##### `getUsdcBalance(): Promise<string>` _(deprecated)_
+
+Deprecated alias for `getPusdBalance()`. It no longer means USDC.e in CLOB V2.
+
+##### `getUsdcEBalance(): Promise<string>`
+
+Get USDC.e balance for onramp/offramp diagnostics.
 
 ---
 
@@ -851,13 +863,13 @@ if (ob.summary.longArbProfit > 0.005) {
 
   if (minBalance > 0) {
     const result = await ctf.merge(conditionId, minBalance);
-    console.log(`Merged ${minBalance}, received ${result.usdcReceived} USDC`);
+    console.log(`Merged ${minBalance}, received ${result.usdcReceived} pUSD`);
   }
 }
 
 // 4. Check for short arbitrage (split, sell YES + NO for profit)
 if (ob.summary.shortArbProfit > 0.005) {
-  // Split USDC into tokens
+  // Split pUSD into tokens
   await ctf.split(conditionId, 10);
   // Sell tokens via CLOB
 }
@@ -923,6 +935,58 @@ const service = new MarketService(clobApi, gammaApi);
 const analysis = await service.getMarketWithAnalysis('0x82ace55...');
 ```
 
+#### Fee-aware orderbook analytics
+
+```typescript
+const book = await service.getFeeAwareProcessedOrderbook('0x82ace55...', {
+  size: 10,
+  liquidityRole: 'taker',
+});
+
+console.log('Gross long:', book.summary.longArbProfit);
+console.log('Net long:', book.summary.feeAdjusted?.long.netProfit);
+console.log('Long fees:', book.summary.feeAdjusted?.long.totalFees);
+
+const netOpportunity = await service.detectArbitrageNet('0x82ace55...', {
+  size: 10,
+  threshold: 0.05, // pUSD for size=10
+});
+```
+
+`detectArbitrage()` is still available as a gross-price screen. `detectArbitrageNet()` should be used for production alerts and execution gates.
+
+---
+
+### TradingService
+
+Fee and order helpers for authenticated trading flows.
+
+```typescript
+const feeInfo = await trading.getMarketFeeInfo(yesTokenId, conditionId);
+
+const estimate = await trading.estimateOrderFees({
+  conditionId,
+  tokenId: yesTokenId,
+  side: 'BUY',
+  price: 0.197,
+  size: 6,
+  liquidityRole: 'taker',
+});
+
+const binaryNet = await trading.estimateBinaryArbitrageFees({
+  conditionId,
+  yesTokenId,
+  noTokenId,
+  type: 'long',
+  size: 10,
+  yesPrice: 0.49,
+  noPrice: 0.49,
+  liquidityRole: 'taker',
+});
+```
+
+Polymarket applies actual fees at match time. These methods are pre-trade estimates based on CLOB market info (`fd.r`, `fd.e`, `fd.to`, `mbf`, `tbf`). See [04-fees.md](04-fees.md).
+
 ---
 
 ### ArbitrageService
@@ -987,17 +1051,65 @@ console.log('Effective buy NO:', effective.effectiveBuyNo);
 
 ---
 
-### `checkArbitrage(yesAsk, yesBid, noAsk, noBid)`
+### `checkArbitrage(yesAsk, noAsk, yesBid, noBid)`
 
-Check for arbitrage opportunities.
+Check for gross arbitrage opportunities. This helper does not subtract CLOB fees.
 
 ```typescript
 import { checkArbitrage } from '@catalyst-team/poly-sdk';
 
 const arb = checkArbitrage(0.57, 0.55, 0.45, 0.43);
-if (arb.hasOpportunity) {
+if (arb) {
   console.log(`${arb.type} opportunity: ${arb.profit * 100}%`);
 }
+```
+
+---
+
+### `checkArbitrageWithFees(yesAsk, noAsk, yesBid, noBid, params)`
+
+Check for a net arbitrage candidate after estimated platform and builder fees.
+
+```typescript
+import { checkArbitrageWithFees } from '@catalyst-team/poly-sdk';
+
+const arb = checkArbitrageWithFees(0.49, 0.48, 0.49, 0.48, {
+  size: 10,
+  rate: 0.03,
+  exponent: 1,
+  takerOnly: true,
+  liquidityRole: 'taker',
+});
+
+if (arb) {
+  console.log('Net profit:', arb.netProfit);
+  console.log('Total fees:', arb.totalFees);
+}
+```
+
+---
+
+### `estimateOrderFees(params)` / `estimateBinaryArbitrageFees(params)`
+
+Pure fee estimators for tests and simulations. Use `TradingService` variants when you want the SDK to fetch live fee parameters from CLOB market info.
+
+```typescript
+import { estimateOrderFees, estimateBinaryArbitrageFees } from '@catalyst-team/poly-sdk';
+
+const order = estimateOrderFees({
+  side: 'BUY',
+  price: 0.5,
+  size: 100,
+  rate: 0.03,
+});
+
+const pair = estimateBinaryArbitrageFees({
+  type: 'long',
+  size: 10,
+  yesPrice: 0.49,
+  noPrice: 0.49,
+  rate: 0.03,
+});
 ```
 
 ---
@@ -1078,8 +1190,29 @@ interface ProcessedOrderbook {
     };
     effectiveLongCost: number;
     effectiveShortRevenue: number;
-    longArbProfit: number;    // > 0 = opportunity
-    shortArbProfit: number;   // > 0 = opportunity
+    longArbProfit: number;    // gross, fees not included
+    shortArbProfit: number;   // gross, fees not included
+    feeAdjusted?: {
+      size: number;
+      liquidityRole: 'maker' | 'taker';
+      feeRate: number;
+      feeExponent: number;
+      takerOnly: boolean;
+      builderMakerFeeBps: number;
+      builderTakerFeeBps: number;
+      long: {
+        grossProfit: number;
+        totalFees: number;
+        netProfit: number;
+        netProfitPerShare: number;
+      };
+      short: {
+        grossProfit: number;
+        totalFees: number;
+        netProfit: number;
+        netProfitPerShare: number;
+      };
+    };
     totalBidDepth: number;
     totalAskDepth: number;
     imbalanceRatio: number;

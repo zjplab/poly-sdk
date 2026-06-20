@@ -3,7 +3,7 @@
  *
  * Core Design Philosophy:
  * - Unifies order creation + lifecycle monitoring in one component
- * - Encapsulates all Polymarket-specific details (USDC.e, tick size, tokenId, CTF, Polygon)
+ * - Encapsulates Polymarket-specific details (pUSD collateral, tick size, tokenId, CTF, Polygon)
  * - Provides complete lifecycle events (CLOB match → tx submit → on-chain confirm)
  * - Auto-validates orders before submission (market state, balance, precision)
  * - Auto-watches orders after creation
@@ -166,7 +166,7 @@
  * const fokResult = await orderMgr.createMarketOrder({
  *   tokenId: '0x...',
  *   side: 'BUY',
- *   amount: 50, // $50 USDC
+ *   amount: 50, // $50 pUSD notional
  *   orderType: 'FOK',
  * });
  *
@@ -811,7 +811,7 @@ export class OrderManager extends EventEmitter {
    *
    * Auto-validates (Polymarket-specific):
    * - Market state (active, not closed)
-   * - USDC.e balance
+   * - pUSD balance
    * - Tick size (0.01)
    * - Minimum size (5 shares)
    * - Minimum value ($1)
@@ -943,7 +943,7 @@ export class OrderManager extends EventEmitter {
         tokenId: params.tokenId,
         side: params.side,
         price: params.price || 0, // Market orders may not have a fixed price
-        originalSize: params.amount, // For market orders, amount is in USDC
+        originalSize: params.amount, // For market orders, amount is pUSD notional
         filledSize: 0,
         remainingSize: params.amount,
         associateTrades: [],
@@ -1426,7 +1426,7 @@ export class OrderManager extends EventEmitter {
 
     const remainingAfterFill = watched.order.originalSize - watched.order.filledSize;
     // Complete fill if: cumulative >= originalSize OR remaining is zero/negative
-    // Note: For market orders (FOK/FAK), originalSize is in USDC but filledSize is in shares,
+    // Note: For market orders (FOK/FAK), originalSize is pUSD notional but filledSize is in shares,
     // causing remainingAfterFill to be negative. This is still a complete fill.
     const isCompleteFill = watched.order.filledSize >= watched.order.originalSize ||
       remainingAfterFill <= 0;
@@ -1519,7 +1519,7 @@ export class OrderManager extends EventEmitter {
       const fillDelta = newFilledSize - oldFilledSize;
       // Check for complete fill using status (preferred) or remainingSize
       // Note: For market orders (FOK/FAK), remainingSize may be negative due to unit mismatch
-      // (originalSize is in USDC, filledSize is in shares), so we rely on status
+      // (originalSize is pUSD notional, filledSize is in shares), so we rely on status
       const isCompleteFill = freshOrder.status === OrderStatus.FILLED ||
         freshOrder.remainingSize === 0 ||
         freshOrder.remainingSize <= 0;

@@ -504,7 +504,7 @@ export interface DualKLineData {
  * 有效价格（考虑镜像订单）
  *
  * Polymarket 的关键特性：买 YES @ P = 卖 NO @ (1-P)
- * 因此同一订单会在两个订单簿中出现
+ * 因此互补流动性在经济上等价。API 快照不应被假设为逐笔完全镜像。
  *
  * 有效价格是考虑镜像后的最优价格：
  * - effectiveBuyYes = min(YES.ask, 1 - NO.bid)
@@ -556,6 +556,29 @@ export interface ProcessedOrderbook {
     // 套利利润（基于有效价格）
     longArbProfit: number;   // 1 - effectiveLongCost，> 0 = 有套利
     shortArbProfit: number;  // effectiveShortRevenue - 1，> 0 = 有套利
+
+    // 可选：扣除估算手续费后的套利结果。只有 fee-aware API 会填充。
+    feeAdjusted?: {
+      size: number;
+      liquidityRole: 'maker' | 'taker';
+      feeRate: number;
+      feeExponent: number;
+      takerOnly: boolean;
+      builderMakerFeeBps: number;
+      builderTakerFeeBps: number;
+      long: {
+        grossProfit: number;
+        totalFees: number;
+        netProfit: number;
+        netProfitPerShare: number;
+      };
+      short: {
+        grossProfit: number;
+        totalFees: number;
+        netProfit: number;
+        netProfitPerShare: number;
+      };
+    };
 
     // 其他指标
     totalBidDepth: number;

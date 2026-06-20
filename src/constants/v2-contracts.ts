@@ -48,8 +48,7 @@ export const POLYGON_CONTRACTS_V2 = {
   // -------------------------------------------------------------------------
 
   /**
-   * pUSD — V2 collateral token. 1:1 backed by USDC.e and supports unwrap
-   * back to USDC.e via the pUSD contract itself.
+   * pUSD — V2 collateral token. Standard ERC-20 on Polygon backed by USDC.
    */
   pUSD: '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB',
 
@@ -96,6 +95,12 @@ export const POLYGON_CONTRACTS_V2 = {
    * Used by `RelayerService.unwrapPUSDtoUsdc()` (Safe → Offramp.unwrap).
    */
   collateralOfframp: '0x2957922Eb93258b93368531d39fAcCA3B4dC5854',
+
+  /** CTF collateral adapter — redeem adapter that returns pUSD to users. */
+  ctfCollateralAdapter: '0xAdA100Db00Ca00073811820692005400218FcE1f',
+
+  /** NegRisk CTF collateral adapter — redeem adapter for NegRisk markets. */
+  negRiskCtfCollateralAdapter: '0xadA2005600Dec949baf300f4C6120000bDB6eAab',
 } as const;
 
 /**

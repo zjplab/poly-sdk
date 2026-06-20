@@ -45,12 +45,44 @@ import type {
   DualPriceLineData,
 } from '../core/types.js';
 import type { BinanceService, BinanceInterval } from './binance-service.js';
+import {
+  estimateBinaryArbitrageFees,
+  type LiquidityRole,
+} from '../utils/price-utils.js';
 
 // CLOB Host
 const CLOB_HOST = 'https://clob.polymarket.com';
 
 // Chain IDs
 export const POLYGON_MAINNET = 137;
+
+export interface MarketFeeConfig {
+  rate: number;
+  exponent: number;
+  takerOnly: boolean;
+  builderMakerFeeBps: number;
+  builderTakerFeeBps: number;
+}
+
+export interface FeeAwareOrderbookOptions {
+  /** Position size in complete sets/shares used for fee estimates. Defaults to 1. */
+  size?: number;
+  /** Expected execution role for the CLOB legs. Defaults to taker. */
+  liquidityRole?: LiquidityRole;
+}
+
+export interface FeeAwareArbitrageOpportunity extends ArbitrageOpportunity {
+  /** Gross profit before estimated CLOB fees. */
+  grossProfit: number;
+  /** Estimated platform + builder fees for the configured size. */
+  totalFees: number;
+  /** Net profit after estimated fees. Equal to `profit`. */
+  netProfit: number;
+  /** Net profit per complete set/share. */
+  netProfitPerShare: number;
+  /** Size used for fee estimation. */
+  size: number;
+}
 
 /**
  * Normalize timestamp to milliseconds.
@@ -273,20 +305,21 @@ export class MarketService {
    * Resolve market tokens from CLOB API
    *
    * This method fetches the actual token IDs from the CLOB API,
-   * which are different from the calculated positionIds in standard CTF.
+   * which should be treated as the authoritative asset IDs for SDK workflows.
    *
    * ## Why This Method Exists
    *
-   * Polymarket CLOB markets use custom ERC-1155 token IDs that are different
-   * from the standard CTF calculated positionIds:
+   * Current Polymarket docs use tokenId, assetId, and CTF positionId for the
+   * ERC-1155 outcome token ID. The safest engineering path is still to read
+   * IDs from Gamma/CLOB market metadata instead of recalculating them locally:
    *
    * ```
-   * Standard CTF:  positionId = keccak256(USDC + keccak256(0x0 + conditionId + indexSet))
-   * Polymarket:    tokenId = custom value from CLOB API (e.g., "25064375110792...")
+   * YES/primary token:   market.tokens[0].tokenId
+   * NO/secondary token:  market.tokens[1].tokenId
    * ```
    *
-   * This method provides the actual tokenIds needed for CTF operations
-   * (split, merge, redeem) on Polymarket markets.
+   * Hand-calculation is easy to get wrong when collateral, oracle, question ID,
+   * condition ID, index set, or V1/V2 context are mismatched.
    *
    * ## Usage with CTFClient
    *
@@ -451,6 +484,108 @@ export class MarketService {
     ]);
 
     return this.processOrderbooks(yesBook, noBook, yesToken.tokenId, noToken.tokenId);
+  }
+
+  /**
+   * Get market-level platform/builder fee parameters from CLOB market info.
+   */
+  async getMarketFeeConfig(conditionId: string): Promise<MarketFeeConfig> {
+    const cacheKey = `clob:market-fees:${conditionId}`;
+    return this.cache.getOrSet(cacheKey, CACHE_TTL.MARKET_INFO, async () => {
+      const client = await this.ensureInitialized();
+      return this.rateLimiter.execute(ApiType.CLOB_API, async () => {
+        const rawClient = client as unknown as {
+          getClobMarketInfo?: (conditionId: string) => Promise<{
+            fd?: { r?: number; e?: number; to?: boolean };
+            mbf?: number;
+            tbf?: number;
+          }>;
+        };
+
+        if (!rawClient.getClobMarketInfo) {
+          throw new PolymarketError(ErrorCode.INVALID_RESPONSE, 'CLOB client does not expose getClobMarketInfo');
+        }
+
+        const info = await rawClient.getClobMarketInfo(conditionId);
+        return {
+          rate: Number(info.fd?.r ?? 0),
+          exponent: Number(info.fd?.e ?? 1),
+          takerOnly: info.fd?.to ?? true,
+          builderMakerFeeBps: Number(info.mbf ?? 0),
+          builderTakerFeeBps: Number(info.tbf ?? 0),
+        };
+      });
+    });
+  }
+
+  /**
+   * Get processed orderbook analytics with fee-adjusted net arbitrage fields.
+   *
+   * Existing `getProcessedOrderbook()` remains gross-only for compatibility.
+   * Use this method before execution or alerting where net profitability matters.
+   */
+  async getFeeAwareProcessedOrderbook(
+    conditionId: string,
+    options: FeeAwareOrderbookOptions = {}
+  ): Promise<ProcessedOrderbook> {
+    const orderbook = await this.getProcessedOrderbook(conditionId);
+    const fees = await this.getMarketFeeConfig(conditionId);
+    const size = options.size ?? 1;
+    const liquidityRole = options.liquidityRole ?? 'taker';
+    const effective = orderbook.summary.effectivePrices;
+
+    const long = estimateBinaryArbitrageFees({
+      type: 'long',
+      size,
+      yesPrice: effective.effectiveBuyYes,
+      noPrice: effective.effectiveBuyNo,
+      liquidityRole,
+      rate: fees.rate,
+      exponent: fees.exponent,
+      takerOnly: fees.takerOnly,
+      makerBps: fees.builderMakerFeeBps,
+      takerBps: fees.builderTakerFeeBps,
+    });
+    const short = estimateBinaryArbitrageFees({
+      type: 'short',
+      size,
+      yesPrice: effective.effectiveSellYes,
+      noPrice: effective.effectiveSellNo,
+      liquidityRole,
+      rate: fees.rate,
+      exponent: fees.exponent,
+      takerOnly: fees.takerOnly,
+      makerBps: fees.builderMakerFeeBps,
+      takerBps: fees.builderTakerFeeBps,
+    });
+
+    return {
+      ...orderbook,
+      summary: {
+        ...orderbook.summary,
+        feeAdjusted: {
+          size,
+          liquidityRole,
+          feeRate: fees.rate,
+          feeExponent: fees.exponent,
+          takerOnly: fees.takerOnly,
+          builderMakerFeeBps: fees.builderMakerFeeBps,
+          builderTakerFeeBps: fees.builderTakerFeeBps,
+          long: {
+            grossProfit: long.grossProfit,
+            totalFees: long.totalFees,
+            netProfit: long.netProfit,
+            netProfitPerShare: long.netProfitPerShare,
+          },
+          short: {
+            grossProfit: short.grossProfit,
+            totalFees: short.totalFees,
+            netProfit: short.netProfit,
+            netProfitPerShare: short.netProfitPerShare,
+          },
+        },
+      },
+    };
   }
 
   /**
@@ -1364,6 +1499,58 @@ export class MarketService {
         // 使用有效价格描述实际操作
         action: `Split $1, Sell YES @ ${effectivePrices.effectiveSellYes.toFixed(4)} + NO @ ${effectivePrices.effectiveSellNo.toFixed(4)}`,
         expectedProfit: orderbook.summary.shortArbProfit,
+      };
+    }
+
+    return null;
+  }
+
+  /**
+   * Detect arbitrage using estimated net profit after market fees.
+   *
+   * `threshold` is denominated in pUSD for the configured `size`, not in
+   * per-share profit. Use this method for execution/alerts; keep
+   * `detectArbitrage()` for cheap gross-price screening.
+   */
+  async detectArbitrageNet(
+    conditionId: string,
+    options: FeeAwareOrderbookOptions & { threshold?: number } = {}
+  ): Promise<FeeAwareArbitrageOpportunity | null> {
+    const size = options.size ?? 1;
+    const threshold = options.threshold ?? 0.005;
+    const orderbook = await this.getFeeAwareProcessedOrderbook(conditionId, {
+      size,
+      liquidityRole: options.liquidityRole,
+    });
+    const effectivePrices = orderbook.summary.effectivePrices;
+    const fees = orderbook.summary.feeAdjusted;
+    if (!fees) return null;
+
+    if (fees.long.netProfit > threshold) {
+      return {
+        type: 'long',
+        profit: fees.long.netProfit,
+        expectedProfit: fees.long.netProfit,
+        grossProfit: fees.long.grossProfit,
+        totalFees: fees.long.totalFees,
+        netProfit: fees.long.netProfit,
+        netProfitPerShare: fees.long.netProfitPerShare,
+        size,
+        action: `Buy YES @ ${effectivePrices.effectiveBuyYes.toFixed(4)} + NO @ ${effectivePrices.effectiveBuyNo.toFixed(4)}, estimated net ${fees.long.netProfit.toFixed(5)} pUSD after fees`,
+      };
+    }
+
+    if (fees.short.netProfit > threshold) {
+      return {
+        type: 'short',
+        profit: fees.short.netProfit,
+        expectedProfit: fees.short.netProfit,
+        grossProfit: fees.short.grossProfit,
+        totalFees: fees.short.totalFees,
+        netProfit: fees.short.netProfit,
+        netProfitPerShare: fees.short.netProfitPerShare,
+        size,
+        action: `Split $${size.toFixed(2)}, sell YES @ ${effectivePrices.effectiveSellYes.toFixed(4)} + NO @ ${effectivePrices.effectiveSellNo.toFixed(4)}, estimated net ${fees.short.netProfit.toFixed(5)} pUSD after fees`,
       };
     }
 

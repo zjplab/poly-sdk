@@ -125,7 +125,7 @@ poly-sdk 架构
 │  └────────────┘ └────────────┘ └────────────┘ └────────────┘ └────────────┘ │
 │                                                                               │
 │  使用官方 Polymarket 客户端:                                                   │
-│  • @polymarket/clob-client - 交易、订单簿、市场数据                            │
+│  • @polymarket/clob-client-v2 - 交易、订单簿、市场数据                         │
 │  • @polymarket/real-time-data-client - WebSocket 实时更新                     │
 │                                                                               │
 ├──────────────────────────────────────────────────────────────────────────────┤
@@ -292,7 +292,7 @@ sdk.stop();  // 断开所有服务
 
 ### TradingService
 
-使用 `@polymarket/clob-client` 进行订单管理。
+使用 `@polymarket/clob-client-v2` 进行订单管理。
 
 ```typescript
 import { TradingService } from '@catalyst-team/poly-sdk';
@@ -329,7 +329,7 @@ const gtdOrder = await trading.createLimitOrder({
 const fokOrder = await trading.createMarketOrder({
   tokenId: yesTokenId,
   side: 'BUY',
-  amount: 10, // $10 USDC
+  amount: 10, // $10 pUSD notional
   orderType: 'FOK',
 });
 
@@ -404,10 +404,10 @@ const signals = await sdk.markets.detectMarketSignals(conditionId);
 买 YES @ P = 卖 NO @ (1-P)
 ```
 
-这意味着**同一订单会出现在两个订单簿中**。简单相加会导致重复计算：
+这意味着互补流动性可以通过另一侧 outcome 视图成交。简单相加可能重复计算可成交流动性：
 
 ```typescript
-// 错误: 重复计算镜像订单
+// 错误: 可能重复计算互补流动性
 const askSum = YES.ask + NO.ask;  // ~1.998, 而非 ~1.0
 
 // 正确: 使用有效价格
@@ -446,26 +446,28 @@ if (!status.ready) {
 
 // ===== CTF 操作 =====
 
-// Split: USDC -> YES + NO 代币
+// Split: pUSD -> YES + NO 代币
 const splitResult = await onchain.split(conditionId, '100');
 
-// Merge: YES + NO -> USDC（用于套利）
+// Merge: YES + NO -> pUSD（用于套利）
 const mergeResult = await onchain.mergeByTokenIds(conditionId, tokenIds, '100');
 
-// Redeem: 获胜代币 -> USDC（结算后）
+// Redeem: 获胜代币 -> pUSD（结算后）
 const redeemResult = await onchain.redeemByTokenIds(conditionId, tokenIds);
 
 // ===== DEX 交换 (QuickSwap V3) =====
 
-// 将 MATIC 交换为 USDC.e（CTF 需要）
+// 如需 onramp rail，可先将 MATIC 交换为 USDC.e，再 wrap 为 pUSD
 await onchain.swap('MATIC', 'USDC_E', '50');
 
 // 获取余额
 const balances = await onchain.getBalances();
+const pusdBalance = await onchain.getPusdBalance();
 console.log(`USDC.e: ${balances.usdcE}`);
+console.log(`pUSD: ${pusdBalance}`);
 ```
 
-**注意**: Polymarket CTF 需要 **USDC.e** (0x2791...)，不是原生 USDC。
+**注意**: 当前 CLOB V2 交易和 CTF 操作使用 **pUSD**。USDC.e 仍可作为 onramp/offramp 资产，但 V2 交易前应转换为 pUSD。
 
 ---
 
@@ -622,11 +624,11 @@ const arbService = new ArbitrageService({
   maxTradeSize: 100,       // 最大 $100
   autoExecute: true,       // 自动执行机会
 
-  // 再平衡器: 自动维持 USDC/代币比例
+  // 再平衡器: 自动维持 pUSD/代币比例
   enableRebalancer: true,
-  minUsdcRatio: 0.2,       // 最小 20% USDC
-  maxUsdcRatio: 0.8,       // 最大 80% USDC
-  targetUsdcRatio: 0.5,    // 再平衡目标
+  minUsdcRatio: 0.2,       // 最小 20% pUSD（保留旧选项名）
+  maxUsdcRatio: 0.8,       // 最大 80% pUSD（保留旧选项名）
+  targetUsdcRatio: 0.5,    // pUSD 再平衡目标
 
   // 执行安全
   sizeSafetyFactor: 0.8,   // 使用 80% 订单簿深度
@@ -831,7 +833,7 @@ import type {
 
 ## 依赖
 
-- `@polymarket/clob-client` - 官方 CLOB 交易客户端
+- `@polymarket/clob-client-v2` - 官方 CLOB 交易客户端
 - `@polymarket/real-time-data-client` - 官方 WebSocket 客户端
 - `ethers@5` - 区块链交互
 - `bottleneck` - 速率限制

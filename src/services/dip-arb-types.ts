@@ -99,8 +99,8 @@ export interface DipArbServiceConfig {
   surgeThreshold?: number;
 
   /**
-   * 完成双腿后自动合并回 USDC
-   * YES + NO tokens → USDC
+   * 完成双腿后自动合并回 pUSD
+   * YES + NO tokens → pUSD
    * @default true
    */
   autoMerge?: boolean;
@@ -541,7 +541,7 @@ export interface DipArbSettleResult {
   upBalance?: number;
   /** DOWN token 数量 */
   downBalance?: number;
-  /** 收到的金额 (USDC) */
+  /** 收到的金额 (pUSD) */
   amountReceived?: number;
   /** 交易哈希 */
   txHash?: string;

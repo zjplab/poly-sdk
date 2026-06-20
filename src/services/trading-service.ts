@@ -11,7 +11,7 @@
  *
  * Important: Polymarket enforces minimum order requirements:
  * - Minimum order size: 5 shares (MIN_ORDER_SIZE_SHARES)
- * - Minimum order value: $1 USDC (MIN_ORDER_VALUE_USDC)
+ * - Minimum order value: $1 pUSD notional (MIN_ORDER_VALUE_USDC, legacy name)
  * Orders below these limits are validated and rejected before sending to API.
  *
  * Note: Market data methods have been moved to MarketService.
@@ -49,6 +49,14 @@ import { CACHE_TTL } from '../core/unified-cache.js';
 import { PolymarketError, ErrorCode } from '../core/errors.js';
 import { createModuleLogger, type Logger } from '../core/logger.js';
 import type { Side, OrderType, PolymarketSignatureType } from '../core/types.js';
+import {
+  estimateOrderFees as estimateOrderFeesPure,
+  estimateBinaryArbitrageFees as estimateBinaryArbitrageFeesPure,
+  type BinaryArbitrageFeeEstimate,
+  type FeeSide,
+  type LiquidityRole,
+  type OrderFeeEstimate,
+} from '../utils/price-utils.js';
 
 const log = createModuleLogger('trading-service');
 import { OrderStatus } from '../core/types.js';
@@ -111,7 +119,7 @@ function signatureTypeName(value: number | undefined): string {
 // Strategies should ensure orders meet these requirements BEFORE sending.
 // ============================================================================
 
-/** Minimum order value in USDC (price * size >= MIN_ORDER_VALUE) */
+/** Minimum order value in pUSD notional (price * size >= MIN_ORDER_VALUE). */
 export const MIN_ORDER_VALUE_USDC = 1;
 
 /** Default minimum order size in shares (fallback if market-specific value not provided) */
@@ -238,7 +246,48 @@ export interface MarketFeeInfo {
   rate: number;
   /** Fee curve exponent from CLOB market info; current V2 markets use 1. */
   exponent: number;
+  /** Whether platform fees apply only to taker fills. */
+  takerOnly: boolean;
+  /** Builder maker fee in basis points, if a builder code is attached. */
+  builderMakerFeeBps: number;
+  /** Builder taker fee in basis points, if a builder code is attached. */
+  builderTakerFeeBps: number;
   source: 'clob_market_info';
+}
+
+export interface EstimateOrderFeesParams {
+  tokenId: string;
+  /** Optional condition ID. Passing it avoids an extra token->condition lookup. */
+  conditionId?: string;
+  side: FeeSide;
+  price: number;
+  size: number;
+  /** Defaults to taker, because marketable orders remove liquidity. */
+  liquidityRole?: LiquidityRole;
+}
+
+export interface EstimateOrderFeesResult extends OrderFeeEstimate {
+  tokenId: string;
+  conditionId?: string;
+  feeInfo: MarketFeeInfo;
+}
+
+export interface EstimateBinaryArbitrageFeesParams {
+  conditionId: string;
+  yesTokenId: string;
+  noTokenId: string;
+  type: 'long' | 'short';
+  size: number;
+  yesPrice: number;
+  noPrice: number;
+  liquidityRole?: LiquidityRole;
+}
+
+export interface EstimateBinaryArbitrageFeesResult extends BinaryArbitrageFeeEstimate {
+  conditionId: string;
+  yesTokenId: string;
+  noTokenId: string;
+  feeInfo: MarketFeeInfo;
 }
 
 /** Parameters for clearing a token position (market sell) */
@@ -839,7 +888,7 @@ export class TradingService {
     }
     const payload = JSON.stringify(options.data ?? {});
     const headers = {
-      'User-Agent': '@polymarket/clob-client',
+      'User-Agent': '@polymarket/clob-client-v2',
       Accept: '*/*',
       'Content-Type': 'application/json',
       Connection: 'keep-alive',
@@ -1041,27 +1090,103 @@ export class TradingService {
     const client = await this.ensureInitialized();
     const rawClient = client as unknown as {
       tokenConditionMap?: Record<string, string>;
-      feeInfos?: Record<string, { rate?: number; exponent?: number }>;
-      getClobMarketInfo?: (conditionId: string) => Promise<unknown>;
+      feeInfos?: Record<string, { rate?: number; exponent?: number; takerOnly?: boolean }>;
+      getClobMarketInfo?: (conditionId: string) => Promise<{
+        fd?: { r?: number; e?: number; to?: boolean };
+        mbf?: number;
+        tbf?: number;
+      }>;
     };
 
     rawClient.tokenConditionMap ??= {};
     if (conditionId) rawClient.tokenConditionMap[tokenId] = conditionId;
 
+    let marketInfo: {
+      fd?: { r?: number; e?: number; to?: boolean };
+      mbf?: number;
+      tbf?: number;
+    } | undefined;
     if (!rawClient.feeInfos?.[tokenId] && conditionId && rawClient.getClobMarketInfo) {
-      await rawClient.getClobMarketInfo(conditionId);
+      marketInfo = await rawClient.getClobMarketInfo(conditionId);
+    } else if (conditionId && rawClient.getClobMarketInfo) {
+      // Still fetch the market info object so builder fee bps and taker-only
+      // flags are not lost when feeInfos were already cached.
+      marketInfo = await rawClient.getClobMarketInfo(conditionId);
     }
 
     const info = rawClient.feeInfos?.[tokenId];
-    if (info?.rate != null && info?.exponent != null) {
+    const rate = marketInfo?.fd?.r ?? info?.rate;
+    const exponent = marketInfo?.fd?.e ?? info?.exponent ?? 1;
+    if (rate != null) {
       return {
-        rate: Number(info.rate),
-        exponent: Number(info.exponent),
+        rate: Number(rate),
+        exponent: Number(exponent),
+        takerOnly: marketInfo?.fd?.to ?? info?.takerOnly ?? true,
+        builderMakerFeeBps: Number(marketInfo?.mbf ?? 0),
+        builderTakerFeeBps: Number(marketInfo?.tbf ?? 0),
         source: 'clob_market_info',
       };
     }
 
     throw new Error(`failed to load market fee info for token ${tokenId}`);
+  }
+
+  /**
+   * Estimate platform + builder fees for a single order using live CLOB market
+   * fee parameters. The protocol calculates and applies actual fees at match
+   * time; this method is for pre-trade budgeting and net-profit checks.
+   */
+  async estimateOrderFees(params: EstimateOrderFeesParams): Promise<EstimateOrderFeesResult> {
+    const feeInfo = await this.getMarketFeeInfo(params.tokenId, params.conditionId);
+    const estimate = estimateOrderFeesPure({
+      side: params.side,
+      price: params.price,
+      size: params.size,
+      liquidityRole: params.liquidityRole ?? 'taker',
+      rate: feeInfo.rate,
+      exponent: feeInfo.exponent,
+      takerOnly: feeInfo.takerOnly,
+      makerBps: feeInfo.builderMakerFeeBps,
+      takerBps: feeInfo.builderTakerFeeBps,
+    });
+
+    return {
+      ...estimate,
+      tokenId: params.tokenId,
+      conditionId: params.conditionId,
+      feeInfo,
+    };
+  }
+
+  /**
+   * Estimate net fees and net profit for two-leg YES/NO arbitrage on a binary
+   * market. Existing gross arbitrage helpers remain available, but production
+   * execution should gate on this net result.
+   */
+  async estimateBinaryArbitrageFees(
+    params: EstimateBinaryArbitrageFeesParams
+  ): Promise<EstimateBinaryArbitrageFeesResult> {
+    const feeInfo = await this.getMarketFeeInfo(params.yesTokenId, params.conditionId);
+    const estimate = estimateBinaryArbitrageFeesPure({
+      type: params.type,
+      size: params.size,
+      yesPrice: params.yesPrice,
+      noPrice: params.noPrice,
+      liquidityRole: params.liquidityRole ?? 'taker',
+      rate: feeInfo.rate,
+      exponent: feeInfo.exponent,
+      takerOnly: feeInfo.takerOnly,
+      makerBps: feeInfo.builderMakerFeeBps,
+      takerBps: feeInfo.builderTakerFeeBps,
+    });
+
+    return {
+      ...estimate,
+      conditionId: params.conditionId,
+      yesTokenId: params.yesTokenId,
+      noTokenId: params.noTokenId,
+      feeInfo,
+    };
   }
 
   // ============================================================================
@@ -1105,7 +1230,7 @@ export class TradingService {
    *
    * Note: Polymarket enforces minimum order requirements:
    * - Minimum size: 5 shares (MIN_ORDER_SIZE_SHARES)
-   * - Minimum value: $1 USDC (MIN_ORDER_VALUE_USDC)
+   * - Minimum value: $1 pUSD notional (MIN_ORDER_VALUE_USDC, legacy name)
    *
    * Orders below these limits will be rejected by the API.
    */
@@ -1259,7 +1384,7 @@ export class TradingService {
    * Create and post a market order
    *
    * Note: Polymarket enforces minimum order requirements:
-   * - Minimum value: $1 USDC (MIN_ORDER_VALUE_USDC)
+   * - Minimum value: $1 pUSD notional (MIN_ORDER_VALUE_USDC, legacy name)
    *
    * Market orders below this limit will be rejected by the API.
    */

@@ -5,7 +5,7 @@
  * detects arbitrage opportunities in Polymarket binary markets.
  *
  * Strategy:
- * - Long Arb: Buy YES + NO (effective cost < $1) → Merge → $1 USDC
+ * - Long Arb: Buy YES + NO (effective cost < $1) -> Merge -> $1 pUSD
  * - Short Arb: Sell pre-held YES + NO tokens (effective revenue > $1)
  *
  * Features:
@@ -63,9 +63,9 @@ export interface ArbitrageServiceConfig {
   rpcUrl?: string;
   /** Minimum profit threshold (default: 0.005 = 0.5%) */
   profitThreshold?: number;
-  /** Minimum trade size in USDC (default: 5) */
+  /** Minimum trade size in pUSD notional (default: 5) */
   minTradeSize?: number;
-  /** Maximum single trade size in USDC (default: 100) */
+  /** Maximum single trade size in pUSD notional (default: 100) */
   maxTradeSize?: number;
   /** Minimum token reserve for short arb (default: 10) */
   minTokenReserve?: number;
@@ -79,11 +79,11 @@ export interface ArbitrageServiceConfig {
   // ===== Rebalancer Config =====
   /** Enable auto-rebalancing (default: false) */
   enableRebalancer?: boolean;
-  /** Minimum USDC ratio 0-1 (default: 0.2 = 20%) - Split if below */
+  /** Minimum pUSD ratio 0-1 (default: 0.2 = 20%) - Split if below */
   minUsdcRatio?: number;
-  /** Maximum USDC ratio 0-1 (default: 0.8 = 80%) - Merge if above */
+  /** Maximum pUSD ratio 0-1 (default: 0.8 = 80%) - Merge if above */
   maxUsdcRatio?: number;
-  /** Target USDC ratio when rebalancing (default: 0.5 = 50%) */
+  /** Target pUSD ratio when rebalancing (default: 0.5 = 50%) */
   targetUsdcRatio?: number;
   /** Max YES/NO imbalance before auto-fix (default: 5 tokens) */
   imbalanceThreshold?: number;
@@ -220,7 +220,7 @@ export interface ArbitrageOpportunity {
   maxBalanceSize: number;
   /** Recommended trade size */
   recommendedSize: number;
-  /** Estimated profit in USDC */
+  /** Estimated profit in pUSD notional */
   estimatedProfit: number;
   /** Description */
   description: string;
@@ -656,7 +656,7 @@ export class ArbitrageService extends EventEmitter {
       }
     }
 
-    // Priority 2: USDC ratio too high (> maxUsdcRatio) → Split to create tokens
+    // Priority 2: pUSD ratio too high (> maxUsdcRatio) → Split to create tokens
     if (usdcRatio > this.config.maxUsdcRatio) {
       const targetUsdc = this.totalCapital * this.config.targetUsdcRatio;
       const excessUsdc = usdc - targetUsdc;
@@ -665,13 +665,13 @@ export class ArbitrageService extends EventEmitter {
         return {
           type: 'split',
           amount: Math.floor(splitAmount * 100) / 100,
-          reason: `USDC ${(usdcRatio * 100).toFixed(0)}% > ${(this.config.maxUsdcRatio * 100).toFixed(0)}% max`,
+          reason: `pUSD ${(usdcRatio * 100).toFixed(0)}% > ${(this.config.maxUsdcRatio * 100).toFixed(0)}% max`,
           priority: 50,
         };
       }
     }
 
-    // Priority 3: USDC ratio too low (< minUsdcRatio) → Merge tokens to recover USDC
+    // Priority 3: pUSD ratio too low (< minUsdcRatio) → Merge tokens to recover pUSD
     if (usdcRatio < this.config.minUsdcRatio && pairedTokens >= this.config.minTradeSize) {
       const targetUsdc = this.totalCapital * this.config.targetUsdcRatio;
       const neededUsdc = targetUsdc - usdc;
@@ -680,7 +680,7 @@ export class ArbitrageService extends EventEmitter {
         return {
           type: 'merge',
           amount: Math.floor(mergeAmount * 100) / 100,
-          reason: `USDC ${(usdcRatio * 100).toFixed(0)}% < ${(this.config.minUsdcRatio * 100).toFixed(0)}% min`,
+          reason: `pUSD ${(usdcRatio * 100).toFixed(0)}% < ${(this.config.minUsdcRatio * 100).toFixed(0)}% min`,
           priority: 50,
         };
       }
@@ -780,7 +780,7 @@ export class ArbitrageService extends EventEmitter {
   // ===== Settle Position Methods =====
 
   /**
-   * Settle a market position - merge paired tokens to recover USDC
+   * Settle a market position - merge paired tokens to recover pUSD
    * @param market Market to settle (defaults to current market)
    * @param execute If true, execute the merge. If false, just return info.
    */
@@ -820,7 +820,7 @@ export class ArbitrageService extends EventEmitter {
     this.log(`\n📊 Position: ${targetMarket.name}`);
     this.log(`   YES: ${yesBalance.toFixed(6)}`);
     this.log(`   NO: ${noBalance.toFixed(6)}`);
-    this.log(`   Paired: ${pairedTokens.toFixed(6)} (can merge → $${pairedTokens.toFixed(2)} USDC)`);
+    this.log(`   Paired: ${pairedTokens.toFixed(6)} (can merge → $${pairedTokens.toFixed(2)} pUSD)`);
 
     if (unpairedYes > 0.001) {
       this.log(`   ⚠️ Unpaired YES: ${unpairedYes.toFixed(6)}`);
@@ -855,13 +855,13 @@ export class ArbitrageService extends EventEmitter {
         result.mergeTxHash = mergeResult.txHash;
         result.usdcRecovered = mergeAmount;
         this.log(`   ✅ Merge TX: ${mergeResult.txHash}`);
-        this.log(`   ✅ Recovered: $${mergeAmount.toFixed(2)} USDC`);
+        this.log(`   ✅ Recovered: $${mergeAmount.toFixed(2)} pUSD`);
       } catch (error: any) {
         result.error = error.message;
         this.log(`   ❌ Merge failed: ${error.message}`);
       }
     } else if (pairedTokens >= 1) {
-      this.log(`   💡 Run settlePosition(market, true) to recover $${pairedTokens.toFixed(2)} USDC`);
+      this.log(`   💡 Run settlePosition(market, true) to recover $${pairedTokens.toFixed(2)} pUSD`);
     }
 
     this.emit('settle', result);
@@ -888,7 +888,7 @@ export class ArbitrageService extends EventEmitter {
     this.log(`\n═══════════════════════════════════════`);
     this.log(`SUMMARY: ${markets.length} markets`);
     if (execute) {
-      this.log(`Total Merged: $${totalMerged.toFixed(2)} USDC`);
+      this.log(`Total Merged: $${totalMerged.toFixed(2)} pUSD`);
     }
     if (totalUnpairedYes > 0.001 || totalUnpairedNo > 0.001) {
       this.log(`Unpaired YES: ${totalUnpairedYes.toFixed(6)}`);
@@ -1002,7 +1002,7 @@ export class ArbitrageService extends EventEmitter {
           actions.push({
             type: 'redeem',
             amount: winningBalance,
-            usdcResult: winningBalance, // 1 USDC per winning token
+            usdcResult: winningBalance, // 1 pUSD per winning token
             success: true,
           });
           totalUsdcRecovered = winningBalance;
@@ -1047,7 +1047,7 @@ export class ArbitrageService extends EventEmitter {
         }
       }
 
-      this.log(`   📋 Plan: ${actions.length} actions, ~$${totalUsdcRecovered.toFixed(2)} USDC`);
+      this.log(`   📋 Plan: ${actions.length} actions, ~$${totalUsdcRecovered.toFixed(2)} pUSD`);
       for (const action of actions) {
         this.log(`      - ${action.type}: ${action.amount.toFixed(4)} → ~$${action.usdcResult.toFixed(2)}`);
       }
@@ -1080,7 +1080,7 @@ export class ArbitrageService extends EventEmitter {
             success: true,
           });
           totalUsdcRecovered = winningBalance;
-          this.log(`   ✅ Redeemed: ${winningBalance.toFixed(4)} tokens → $${winningBalance.toFixed(2)} USDC`);
+          this.log(`   ✅ Redeemed: ${winningBalance.toFixed(4)} tokens → $${winningBalance.toFixed(2)} pUSD`);
         } catch (error: any) {
           actions.push({
             type: 'redeem',
@@ -1115,7 +1115,7 @@ export class ArbitrageService extends EventEmitter {
             success: true,
           });
           totalUsdcRecovered += mergeAmount;
-          this.log(`   ✅ Merged: ${mergeAmount.toFixed(4)} pairs → $${mergeAmount.toFixed(2)} USDC`);
+          this.log(`   ✅ Merged: ${mergeAmount.toFixed(4)} pairs → $${mergeAmount.toFixed(2)} pUSD`);
         } catch (error: any) {
           actions.push({
             type: 'merge',
@@ -1142,7 +1142,7 @@ export class ArbitrageService extends EventEmitter {
             orderType: 'FOK',
           });
           if (result.success) {
-            // Estimate USDC received (conservative estimate since we don't have exact trade info)
+            // Estimate pUSD received (conservative estimate since we don't have exact trade info)
             const usdcReceived = sellAmount * 0.5; // Assume ~0.5 average price
             actions.push({
               type: 'sell_yes',
@@ -1151,7 +1151,7 @@ export class ArbitrageService extends EventEmitter {
               success: true,
             });
             totalUsdcRecovered += usdcReceived;
-            this.log(`   ✅ Sold YES: ${sellAmount.toFixed(4)} → ~$${usdcReceived.toFixed(2)} USDC`);
+            this.log(`   ✅ Sold YES: ${sellAmount.toFixed(4)} → ~$${usdcReceived.toFixed(2)} pUSD`);
           } else {
             throw new Error(result.errorMsg || 'Sell failed');
           }
@@ -1177,7 +1177,7 @@ export class ArbitrageService extends EventEmitter {
             orderType: 'FOK',
           });
           if (result.success) {
-            // Estimate USDC received (conservative estimate since we don't have exact trade info)
+            // Estimate pUSD received (conservative estimate since we don't have exact trade info)
             const usdcReceived = sellAmount * 0.5; // Assume ~0.5 average price
             actions.push({
               type: 'sell_no',
@@ -1186,7 +1186,7 @@ export class ArbitrageService extends EventEmitter {
               success: true,
             });
             totalUsdcRecovered += usdcReceived;
-            this.log(`   ✅ Sold NO: ${sellAmount.toFixed(4)} → ~$${usdcReceived.toFixed(2)} USDC`);
+            this.log(`   ✅ Sold NO: ${sellAmount.toFixed(4)} → ~$${usdcReceived.toFixed(2)} pUSD`);
           } else {
             throw new Error(result.errorMsg || 'Sell failed');
           }
@@ -1240,7 +1240,7 @@ export class ArbitrageService extends EventEmitter {
     }
 
     this.log(`\n═══════════════════════════════════════`);
-    this.log(`TOTAL: $${totalRecovered.toFixed(2)} USDC ${execute ? 'recovered' : 'expected'}`);
+    this.log(`TOTAL: $${totalRecovered.toFixed(2)} pUSD ${execute ? 'recovered' : 'expected'}`);
 
     return results;
   }
@@ -1367,7 +1367,7 @@ export class ArbitrageService extends EventEmitter {
       };
 
       const [usdcBalance, positions] = await Promise.all([
-        this.ctf.getUsdcBalance(),
+        this.ctf.getPusdBalance(),
         this.ctf.getPositionBalanceByTokenIds(this.market.conditionId, tokenIds),
       ]);
 
@@ -1402,7 +1402,7 @@ export class ArbitrageService extends EventEmitter {
           size,
           profit: 0,
           txHashes,
-          error: `Insufficient USDC.e: have ${this.balance.usdc.toFixed(2)}, need ${requiredUsdc.toFixed(2)}`,
+          error: `Insufficient pUSD: have ${this.balance.usdc.toFixed(2)}, need ${requiredUsdc.toFixed(2)}`,
           executionTimeMs: Date.now() - startTime,
         };
       }

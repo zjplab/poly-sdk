@@ -113,7 +113,12 @@ export type {
 } from './services/wallet-service.js';
 
 export { MarketService, getIntervalMs as getIntervalMsService } from './services/market-service.js';
-export type { ResolvedMarketTokens } from './services/market-service.js';
+export type {
+  ResolvedMarketTokens,
+  MarketFeeConfig,
+  FeeAwareOrderbookOptions,
+  FeeAwareArbitrageOpportunity,
+} from './services/market-service.js';
 
 export { EventService } from './services/event-service.js';
 export type {
@@ -367,6 +372,11 @@ export type {
   ApiCredentials,
   LimitOrderParams,
   MarketOrderParams,
+  EstimateOrderFeesParams,
+  EstimateOrderFeesResult,
+  EstimateBinaryArbitrageFeesParams,
+  EstimateBinaryArbitrageFeesResult,
+  MarketFeeInfo,
   PresignedOrder,
   PresignedOrderFingerprint,
   PresignOptions,
@@ -439,17 +449,21 @@ export type {
 // TradingService provides all trading functionality with proper type exports
 
 // CTF (Conditional Token Framework)
-// NOTE: USDC_CONTRACT is USDC.e (bridged) — off-exchange / fund-flow rail.
-//   V2 trading collateral is pUSD (POLYGON_CONTRACTS_V2.pUSD).
-// NATIVE_USDC_CONTRACT is native USDC, NOT compatible with CTF.
+// NOTE: V2 trading collateral is pUSD. USDC_CONTRACT is retained as a
+// backwards-compatible pUSD alias; use PUSD_CONTRACT / COLLATERAL_CONTRACT in
+// new code. USDC_E_CONTRACT is the onramp/offramp rail.
+// NATIVE_USDC_CONTRACT is native USDC, a deposit/bridge input.
 // V1 exchange aliases (CTF_EXCHANGE / NEG_RISK_CTF_EXCHANGE) have been
 // removed at the V2-only cutover; consume CTF_EXCHANGE_V2 /
 // NEG_RISK_CTF_EXCHANGE_V2 or POLYGON_CONTRACTS_V2 directly.
 export {
   CTFClient,
   CTF_CONTRACT,
-  USDC_CONTRACT,           // USDC.e (0x2791...) - off-exchange rail
-  NATIVE_USDC_CONTRACT,    // Native USDC (0x3c49...) - NOT for CTF
+  PUSD_CONTRACT,
+  USDC_E_CONTRACT,
+  COLLATERAL_CONTRACT,
+  USDC_CONTRACT,           // Deprecated pUSD alias
+  NATIVE_USDC_CONTRACT,    // Native USDC (0x3c49...) - deposit/bridge input
   NEG_RISK_CTF_EXCHANGE_V2,               // V2 canonical
   NEG_RISK_ADAPTER,
   CTF_EXCHANGE_V2,                        // V2 canonical
@@ -457,6 +471,8 @@ export {
   calculateConditionId,
   parseUsdc,
   formatUsdc,
+  parseCollateralAmount,
+  formatCollateralAmount,
 } from './clients/ctf-client.js';
 export type {
   CTFConfig,
@@ -555,16 +571,32 @@ export {
   calculateBuyAmount,
   calculateSellPayout,
   calculateSharesForAmount,
+  calculatePlatformFee,
+  calculateBuilderFee,
+  estimateOrderFees,
+  estimateBinaryArbitrageFees,
   calculateSpread,
   calculateMidpoint,
   formatPrice,
   formatUSDC,
   calculatePnL,
   checkArbitrage,
+  checkArbitrageWithFees,
   getEffectivePrices,
   ROUNDING_CONFIG,
 } from './utils/price-utils.js';
-export type { TickSize } from './utils/price-utils.js';
+export type {
+  TickSize,
+  LiquidityRole,
+  FeeSide,
+  FeeCurve,
+  BuilderFeeRates,
+  OrderFeeEstimateParams,
+  OrderFeeEstimate,
+  BinaryArbitrageFeeParams,
+  BinaryArbitrageFeeEstimate,
+  FeeAwareArbitrageResult,
+} from './utils/price-utils.js';
 
 // Calldata decoder (for mempool pending TX decoding — copy-trading)
 export {
