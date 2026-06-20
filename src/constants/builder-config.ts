@@ -22,6 +22,15 @@
 
 /** Strict bytes32 format: `0x` followed by exactly 64 hex characters. */
 const BYTES32_REGEX = /^0x[0-9a-fA-F]{64}$/;
+export const ZERO_BUILDER_CODE = '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+/**
+ * A zero bytes32 builder code is valid order metadata but should be treated as
+ * no fee-bearing builder attribution.
+ */
+export function isActiveBuilderCode(code?: string): boolean {
+  return Boolean(code && code !== ZERO_BUILDER_CODE);
+}
 
 /**
  * Read and validate the V2 builder code from the environment.

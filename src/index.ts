@@ -575,6 +575,7 @@ export {
   calculateBuilderFee,
   estimateOrderFees,
   estimateBinaryArbitrageFees,
+  estimateMultiLegArbitrageFees,
   calculateSpread,
   calculateMidpoint,
   formatPrice,
@@ -595,6 +596,10 @@ export type {
   OrderFeeEstimate,
   BinaryArbitrageFeeParams,
   BinaryArbitrageFeeEstimate,
+  MultiLegArbitrageLegInput,
+  MultiLegArbitrageFeeParams,
+  MultiLegArbitrageLegEstimate,
+  MultiLegArbitrageFeeEstimate,
   FeeAwareArbitrageResult,
 } from './utils/price-utils.js';
 
@@ -718,7 +723,14 @@ export class PolymarketSDK {
     // Initialize services
     this.wallets = new WalletService(this.dataApi, this.subgraph, this.cache);
     this.binance = new BinanceService(this.rateLimiter, this.cache);
-    this.markets = new MarketService(this.gammaApi, this.dataApi, this.rateLimiter, this.cache, undefined, this.binance);
+    this.markets = new MarketService(
+      this.gammaApi,
+      this.dataApi,
+      this.rateLimiter,
+      this.cache,
+      { builderCode: config.builderCode },
+      this.binance
+    );
     this.events = new EventService(this.rateLimiter, this.cache);
     this.realtime = new RealtimeServiceV2();
     this.smartMoneyCore = new SmartMoneyCore(this.wallets);

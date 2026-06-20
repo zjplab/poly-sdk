@@ -42,7 +42,12 @@ import {
 } from '@polymarket/clob-client-v2';
 
 import { Wallet } from 'ethers';
-import { readBuilderCode, readBuilderCodeOptional } from '../constants/builder-config.js';
+import {
+  isActiveBuilderCode,
+  readBuilderCode,
+  readBuilderCodeOptional,
+  ZERO_BUILDER_CODE,
+} from '../constants/builder-config.js';
 import { RateLimiter, ApiType } from '../core/rate-limiter.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
 import { CACHE_TTL } from '../core/unified-cache.js';
@@ -201,6 +206,11 @@ export interface LimitOrderParams {
   size: number;
   orderType?: 'GTC' | 'GTD';
   expiration?: number;
+  /**
+   * Submit as post-only so the order can only rest on the book as maker.
+   * CLOB rejects post-only orders that would cross the spread.
+   */
+  postOnly?: boolean;
   /** Market-specific minimum order size (from CLOB API). Falls back to MIN_ORDER_SIZE_SHARES if not provided. */
   minimumOrderSize?: number;
   /** Optional hot-path metadata from WS/orderbook cache. Avoids REST /tick-size during order submission. */
@@ -399,6 +409,7 @@ export interface PresignedOrderFingerprint {
   tokenId: string;
   side: Side;
   orderType: 'GTC' | 'GTD' | 'FOK' | 'FAK';
+  postOnly?: boolean;
   price?: number;
   size?: number;
   amount?: number;
@@ -417,6 +428,7 @@ export interface PresignedOrder {
   key: string;
   kind: 'market' | 'limit';
   orderType: 'GTC' | 'GTD' | 'FOK' | 'FAK';
+  postOnly?: boolean;
   signedOrder: SignedOrder;
   fingerprint: PresignedOrderFingerprint;
   createdAt: number;
@@ -692,7 +704,7 @@ export class TradingService {
     this.diag.info('TradingService V2 initialized', {
       chainId: this.chainId,
       builderCode: builderConfig?.builderCode ?? '(none)',
-      builder_attribution: builderConfig?.builderCode === '0x0000000000000000000000000000000000000000000000000000000000000000'
+      builder_attribution: builderConfig?.builderCode === ZERO_BUILDER_CODE
         ? 'zero_no_rewards'
         : (builderConfig?.builderCode ? 'set' : 'absent'),
       signature_type: signatureTypeName(signatureType),
@@ -811,10 +823,12 @@ export class TradingService {
   ): PresignedOrderFingerprint {
     const limitParams = params as LimitOrderParams;
     const marketParams = params as MarketOrderParams;
+    const postOnly = 'postOnly' in params ? params.postOnly : undefined;
     return {
       tokenId: params.tokenId,
       side: params.side,
       orderType,
+      postOnly,
       price: params.price,
       size: 'size' in params ? limitParams.size : undefined,
       amount: 'amount' in params ? marketParams.amount : undefined,
@@ -1117,13 +1131,17 @@ export class TradingService {
     const info = rawClient.feeInfos?.[tokenId];
     const rate = marketInfo?.fd?.r ?? info?.rate;
     const exponent = marketInfo?.fd?.e ?? info?.exponent ?? 1;
+    const builderCode = this.config.builderCode !== undefined
+      ? this.config.builderCode
+      : readBuilderCodeOptional();
+    const applyBuilderFees = isActiveBuilderCode(builderCode);
     if (rate != null) {
       return {
         rate: Number(rate),
         exponent: Number(exponent),
         takerOnly: marketInfo?.fd?.to ?? info?.takerOnly ?? true,
-        builderMakerFeeBps: Number(marketInfo?.mbf ?? 0),
-        builderTakerFeeBps: Number(marketInfo?.tbf ?? 0),
+        builderMakerFeeBps: applyBuilderFees ? Number(marketInfo?.mbf ?? 0) : 0,
+        builderTakerFeeBps: applyBuilderFees ? Number(marketInfo?.tbf ?? 0) : 0,
         source: 'clob_market_info',
       };
     }
@@ -1284,7 +1302,8 @@ export class TradingService {
             expiration: params.expiration || 0,
           },
           { tickSize, negRisk },
-          orderType
+          orderType,
+          params.postOnly === true
         );
 
         // Per CLOB API docs: orderID is always returned on successful 200 responses.
@@ -1357,6 +1376,7 @@ export class TradingService {
       key,
       kind: 'limit',
       orderType,
+      postOnly: params.postOnly === true,
       signedOrder,
       fingerprint: this.createPresignedFingerprint({ ...params, tickSize, negRisk }, orderType, wallet),
       createdAt: signedAt,
@@ -1634,7 +1654,11 @@ export class TradingService {
       try {
         this.lastClobPostTelemetry = undefined;
         presigned.used = true;
-        const result = await client.postOrder(presigned.signedOrder, presigned.orderType as ClobOrderType);
+        const result = await client.postOrder(
+          presigned.signedOrder,
+          presigned.orderType as ClobOrderType,
+          presigned.postOnly === true,
+        );
         const postedAt = Date.now();
         const postTelemetry = this.readLastClobPostTelemetry();
         const telemetry: OrderLatencyTelemetry = {
@@ -1803,6 +1827,14 @@ export class TradingService {
       };
     }
 
+    const batchPostOnly = orders.some(order => order.postOnly === true);
+    if (batchPostOnly && orders.some(order => order.postOnly !== true)) {
+      return {
+        success: false,
+        errorMsg: 'Batch postOnly must be consistent for all orders because CLOB postOrders accepts a batch-level postOnly flag',
+      };
+    }
+
     // Validate each order
     const validationErrors: string[] = [];
     for (let i = 0; i < orders.length; i++) {
@@ -1875,7 +1907,7 @@ export class TradingService {
           orderType,
         }));
 
-        const results = await client.postOrders(batchArgs);
+        const results = await client.postOrders(batchArgs, batchPostOnly);
 
         // Step 4: Process batch response
         const successfulOrderIds: string[] = [];

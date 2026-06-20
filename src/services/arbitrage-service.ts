@@ -26,12 +26,16 @@ import {
   type OrderbookSnapshot,
 } from './realtime-service-v2.js';
 import { TradingService } from './trading-service.js';
-import { MarketService } from './market-service.js';
+import { MarketService, type MarketFeeConfig } from './market-service.js';
 import { CTFClient, type TokenIds } from '../clients/ctf-client.js';
 import { GammaApiClient } from '../clients/gamma-api.js';
 import { RateLimiter } from '../core/rate-limiter.js';
 import { createUnifiedCache } from '../core/unified-cache.js';
-import { getEffectivePrices } from '../utils/price-utils.js';
+import {
+  estimateBinaryArbitrageFees,
+  getEffectivePrices,
+  type LiquidityRole,
+} from '../utils/price-utils.js';
 import { createModuleLogger } from '../core/logger.js';
 
 const log = createModuleLogger('arbitrage');
@@ -95,6 +99,10 @@ export interface ArbitrageServiceConfig {
   sizeSafetyFactor?: number;
   /** Auto-fix imbalance after failed execution (default: true) */
   autoFixImbalance?: boolean;
+  /** Subtract estimated CLOB platform and builder fees from live opportunity checks. Defaults to true. */
+  feeAware?: boolean;
+  /** Expected execution role for live fee estimates. Defaults to taker. */
+  liquidityRole?: LiquidityRole;
 }
 
 export interface RebalanceAction {
@@ -156,6 +164,12 @@ export interface ScanCriteria {
   keywords?: string[];
   /** Maximum number of markets to scan (default: 100) */
   limit?: number;
+  /** Subtract estimated platform and builder fees before selecting candidates. Defaults to true. */
+  feeAware?: boolean;
+  /** Share size used for fee estimates. Defaults to 1 for per-share threshold semantics. */
+  feeEstimateSize?: number;
+  /** Expected execution role for scanner fee estimates. Defaults to taker. */
+  liquidityRole?: LiquidityRole;
 }
 
 export interface ScanResult {
@@ -167,6 +181,16 @@ export interface ScanResult {
   profitRate: number;
   /** Profit percentage */
   profitPercent: number;
+  /** Whether profitRate/profitPercent are net of estimated fees. */
+  feeAware?: boolean;
+  /** Best gross profit rate for the selected path or strongest path. */
+  grossProfitRate?: number;
+  /** Best net profit rate after estimated platform and builder fees. */
+  netProfitRate?: number;
+  /** Total estimated fees for feeEstimateSize on the selected path. */
+  totalFees?: number;
+  /** Share size used for fee estimates. */
+  feeEstimateSize?: number;
   /** Effective prices */
   effectivePrices: {
     buyYes: number;
@@ -222,6 +246,12 @@ export interface ArbitrageOpportunity {
   recommendedSize: number;
   /** Estimated profit in pUSD notional */
   estimatedProfit: number;
+  /** Whether profit fields are net of estimated platform and builder fees. */
+  feeAware?: boolean;
+  /** Gross profit rate before estimated CLOB fees. */
+  grossProfitRate?: number;
+  /** Estimated platform + builder fees for recommendedSize. */
+  totalFees?: number;
   /** Description */
   description: string;
   /** Timestamp */
@@ -290,6 +320,7 @@ export class ArbitrageService extends EventEmitter {
   private rebalanceInterval: ReturnType<typeof setInterval> | null = null;
   private isRunning = false;
   private totalCapital = 0;
+  private marketFeeConfig: MarketFeeConfig | null = null;
 
   // Statistics
   private stats = {
@@ -326,6 +357,8 @@ export class ArbitrageService extends EventEmitter {
       // Execution safety
       sizeSafetyFactor: config.sizeSafetyFactor ?? 0.8,
       autoFixImbalance: config.autoFixImbalance ?? true,
+      feeAware: config.feeAware ?? true,
+      liquidityRole: config.liquidityRole ?? 'taker',
     };
 
     this.rateLimiter = new RateLimiter();
@@ -368,6 +401,15 @@ export class ArbitrageService extends EventEmitter {
     this.log(`Condition ID: ${market.conditionId.slice(0, 20)}...`);
     this.log(`Profit Threshold: ${(this.config.profitThreshold * 100).toFixed(2)}%`);
     this.log(`Auto Execute: ${this.config.autoExecute ? 'YES' : 'NO'}`);
+    this.log(`Fee Aware: ${this.config.feeAware ? 'YES' : 'NO'}`);
+
+    this.marketFeeConfig = null;
+    if (this.config.feeAware) {
+      const cache = createUnifiedCache();
+      const feeMarketService = new MarketService(undefined, undefined, this.rateLimiter, cache);
+      this.marketFeeConfig = await feeMarketService.getMarketFeeConfig(market.conditionId);
+      this.log(`Fee Config: rate=${this.marketFeeConfig.rate}, exponent=${this.marketFeeConfig.exponent}, takerOnly=${this.marketFeeConfig.takerOnly}, builderTakerBps=${this.marketFeeConfig.builderTakerFeeBps}`);
+    }
 
     // Initialize trading service
     if (this.tradingService) {
@@ -446,6 +488,7 @@ export class ArbitrageService extends EventEmitter {
       this.marketSubscription = null;
     }
     this.realtimeService.disconnect();
+    this.marketFeeConfig = null;
 
     this.log('Stopped');
     this.log(`Total opportunities: ${this.stats.opportunitiesDetected}`);
@@ -479,11 +522,54 @@ export class ArbitrageService extends EventEmitter {
     };
   }
 
+  private estimateOpportunityProfit(
+    type: 'long' | 'short',
+    size: number,
+    yesPrice: number,
+    noPrice: number,
+    grossProfitPerShare: number
+  ): {
+    grossProfitRate: number;
+    profitRate: number;
+    estimatedProfit: number;
+    totalFees: number;
+  } {
+    if (!this.config.feeAware || !this.marketFeeConfig) {
+      return {
+        grossProfitRate: grossProfitPerShare,
+        profitRate: grossProfitPerShare,
+        estimatedProfit: grossProfitPerShare * size,
+        totalFees: 0,
+      };
+    }
+
+    const estimate = estimateBinaryArbitrageFees({
+      type,
+      size,
+      yesPrice,
+      noPrice,
+      liquidityRole: this.config.liquidityRole,
+      rate: this.marketFeeConfig.rate,
+      exponent: this.marketFeeConfig.exponent,
+      takerOnly: this.marketFeeConfig.takerOnly,
+      makerBps: this.marketFeeConfig.builderMakerFeeBps,
+      takerBps: this.marketFeeConfig.builderTakerFeeBps,
+    });
+
+    return {
+      grossProfitRate: estimate.grossProfitPerShare,
+      profitRate: estimate.netProfitPerShare,
+      estimatedProfit: estimate.netProfit,
+      totalFees: estimate.totalFees,
+    };
+  }
+
   /**
    * Check for arbitrage opportunity based on current orderbook
    */
   checkOpportunity(): ArbitrageOpportunity | null {
     if (!this.market) return null;
+    if (this.config.feeAware && !this.marketFeeConfig) return null;
 
     const { yesBids, yesAsks, noBids, noAsks } = this.orderbook;
     if (yesBids.length === 0 || yesAsks.length === 0 || noBids.length === 0 || noAsks.length === 0) {
@@ -512,52 +598,87 @@ export class ArbitrageService extends EventEmitter {
     const heldPairs = Math.min(this.balance.yesTokens, this.balance.noTokens);
     const balanceLongSize = longCost > 0 ? this.balance.usdc / longCost : 0;
 
-    // Check long arb
-    if (longProfit > this.config.profitThreshold) {
-      const maxSize = Math.min(orderbookLongSize, balanceLongSize * safetyFactor, this.config.maxTradeSize);
-      if (maxSize >= this.config.minTradeSize) {
-        return {
-          type: 'long',
-          profitRate: longProfit,
-          profitPercent: longProfit * 100,
-          effectivePrices: {
-            buyYes: effective.effectiveBuyYes,
-            buyNo: effective.effectiveBuyNo,
-            sellYes: effective.effectiveSellYes,
-            sellNo: effective.effectiveSellNo,
-          },
-          maxOrderbookSize: orderbookLongSize,
-          maxBalanceSize: balanceLongSize,
-          recommendedSize: maxSize,
-          estimatedProfit: longProfit * maxSize,
-          description: `Buy YES @ ${effective.effectiveBuyYes.toFixed(4)} + NO @ ${effective.effectiveBuyNo.toFixed(4)}, Merge for $1`,
-          timestamp: Date.now(),
-        };
-      }
+    const longGate = this.estimateOpportunityProfit(
+      'long',
+      1,
+      effective.effectiveBuyYes,
+      effective.effectiveBuyNo,
+      longProfit
+    );
+    const shortGate = this.estimateOpportunityProfit(
+      'short',
+      1,
+      effective.effectiveSellYes,
+      effective.effectiveSellNo,
+      shortProfit
+    );
+
+    const maxLongSize = Math.min(orderbookLongSize, balanceLongSize * safetyFactor, this.config.maxTradeSize);
+    const maxShortSize = Math.min(orderbookShortSize, heldPairs, this.config.maxTradeSize);
+    const longEligible = longGate.profitRate > this.config.profitThreshold
+      && maxLongSize >= this.config.minTradeSize;
+    const shortEligible = shortGate.profitRate > this.config.profitThreshold
+      && maxShortSize >= this.config.minTradeSize
+      && heldPairs >= this.config.minTokenReserve;
+
+    if (longEligible && (!shortEligible || longGate.profitRate >= shortGate.profitRate)) {
+      const estimate = this.estimateOpportunityProfit(
+        'long',
+        maxLongSize,
+        effective.effectiveBuyYes,
+        effective.effectiveBuyNo,
+        longProfit
+      );
+      return {
+        type: 'long',
+        profitRate: estimate.profitRate,
+        profitPercent: estimate.profitRate * 100,
+        effectivePrices: {
+          buyYes: effective.effectiveBuyYes,
+          buyNo: effective.effectiveBuyNo,
+          sellYes: effective.effectiveSellYes,
+          sellNo: effective.effectiveSellNo,
+        },
+        maxOrderbookSize: orderbookLongSize,
+        maxBalanceSize: balanceLongSize,
+        recommendedSize: maxLongSize,
+        estimatedProfit: estimate.estimatedProfit,
+        feeAware: this.config.feeAware,
+        grossProfitRate: estimate.grossProfitRate,
+        totalFees: estimate.totalFees,
+        description: `Buy YES @ ${effective.effectiveBuyYes.toFixed(4)} + NO @ ${effective.effectiveBuyNo.toFixed(4)}, Merge for $1`,
+        timestamp: Date.now(),
+      };
     }
 
-    // Check short arb
-    if (shortProfit > this.config.profitThreshold) {
-      const maxSize = Math.min(orderbookShortSize, heldPairs, this.config.maxTradeSize);
-      if (maxSize >= this.config.minTradeSize && heldPairs >= this.config.minTokenReserve) {
-        return {
-          type: 'short',
-          profitRate: shortProfit,
-          profitPercent: shortProfit * 100,
-          effectivePrices: {
-            buyYes: effective.effectiveBuyYes,
-            buyNo: effective.effectiveBuyNo,
-            sellYes: effective.effectiveSellYes,
-            sellNo: effective.effectiveSellNo,
-          },
-          maxOrderbookSize: orderbookShortSize,
-          maxBalanceSize: heldPairs,
-          recommendedSize: maxSize,
-          estimatedProfit: shortProfit * maxSize,
-          description: `Sell YES @ ${effective.effectiveSellYes.toFixed(4)} + NO @ ${effective.effectiveSellNo.toFixed(4)}`,
-          timestamp: Date.now(),
-        };
-      }
+    if (shortEligible) {
+      const estimate = this.estimateOpportunityProfit(
+        'short',
+        maxShortSize,
+        effective.effectiveSellYes,
+        effective.effectiveSellNo,
+        shortProfit
+      );
+      return {
+        type: 'short',
+        profitRate: estimate.profitRate,
+        profitPercent: estimate.profitRate * 100,
+        effectivePrices: {
+          buyYes: effective.effectiveBuyYes,
+          buyNo: effective.effectiveBuyNo,
+          sellYes: effective.effectiveSellYes,
+          sellNo: effective.effectiveSellNo,
+        },
+        maxOrderbookSize: orderbookShortSize,
+        maxBalanceSize: heldPairs,
+        recommendedSize: maxShortSize,
+        estimatedProfit: estimate.estimatedProfit,
+        feeAware: this.config.feeAware,
+        grossProfitRate: estimate.grossProfitRate,
+        totalFees: estimate.totalFees,
+        description: `Sell YES @ ${effective.effectiveSellYes.toFixed(4)} + NO @ ${effective.effectiveSellNo.toFixed(4)}`,
+        timestamp: Date.now(),
+      };
     }
 
     return null;
@@ -1637,9 +1758,12 @@ export class ArbitrageService extends EventEmitter {
       maxVolume24h,
       keywords = [],
       limit = 100,
+      feeAware = true,
+      feeEstimateSize = 1,
+      liquidityRole = 'taker',
     } = criteria;
 
-    this.log(`Scanning markets (minVolume: $${minVolume24h}, minProfit: ${(minProfit * 100).toFixed(2)}%)...`);
+    this.log(`Scanning markets (minVolume: $${minVolume24h}, minProfit: ${(minProfit * 100).toFixed(2)}%, feeAware: ${feeAware ? 'yes' : 'no'})...`);
 
     // Create temporary API clients for scanning
     const cache = createUnifiedCache();
@@ -1691,23 +1815,46 @@ export class ArbitrageService extends EventEmitter {
         // Get orderbook data
         let orderbook;
         try {
-          orderbook = await tempMarketService.getProcessedOrderbook(gammaMarket.conditionId);
+          orderbook = feeAware
+            ? await tempMarketService.getFeeAwareProcessedOrderbook(gammaMarket.conditionId, {
+              size: feeEstimateSize,
+              liquidityRole,
+            })
+            : await tempMarketService.getProcessedOrderbook(gammaMarket.conditionId);
         } catch {
           continue; // Skip if orderbook not available
         }
 
         const { effectivePrices, longArbProfit, shortArbProfit } = orderbook.summary;
+        const feeAdjusted = orderbook.summary.feeAdjusted;
+        if (feeAware && !feeAdjusted) continue;
+
+        const longNetProfit = feeAdjusted?.long.netProfitPerShare ?? longArbProfit;
+        const shortNetProfit = feeAdjusted?.short.netProfitPerShare ?? shortArbProfit;
 
         // Determine best arbitrage type
         let arbType: 'long' | 'short' | 'none' = 'none';
         let profitRate = 0;
+        let grossProfitRate = Math.max(longArbProfit, shortArbProfit);
+        let netProfitRate = Math.max(longNetProfit, shortNetProfit);
+        let totalFees = feeAdjusted
+          ? (longNetProfit >= shortNetProfit
+            ? feeAdjusted.long.totalFees
+            : feeAdjusted.short.totalFees)
+          : 0;
 
-        if (longArbProfit > minProfit && longArbProfit >= shortArbProfit) {
+        if (longNetProfit > minProfit && longNetProfit >= shortNetProfit) {
           arbType = 'long';
-          profitRate = longArbProfit;
-        } else if (shortArbProfit > minProfit) {
+          profitRate = longNetProfit;
+          grossProfitRate = longArbProfit;
+          netProfitRate = longNetProfit;
+          totalFees = feeAdjusted?.long.totalFees ?? 0;
+        } else if (shortNetProfit > minProfit) {
           arbType = 'short';
-          profitRate = shortArbProfit;
+          profitRate = shortNetProfit;
+          grossProfitRate = shortArbProfit;
+          netProfitRate = shortNetProfit;
+          totalFees = feeAdjusted?.short.totalFees ?? 0;
         }
 
         // Calculate available size (min of both sides)
@@ -1743,12 +1890,20 @@ export class ArbitrageService extends EventEmitter {
         } else {
           description = `No opportunity (Long cost: ${longCost.toFixed(4)}, Short rev: ${shortRevenue.toFixed(4)})`;
         }
+        if (feeAware) {
+          description += ` | gross ${(grossProfitRate * 100).toFixed(3)}%, fees ${totalFees.toFixed(5)} pUSD/${feeEstimateSize}, net ${(netProfitRate * 100).toFixed(3)}%`;
+        }
 
         results.push({
           market: marketConfig,
           arbType,
           profitRate,
           profitPercent: profitRate * 100,
+          feeAware,
+          grossProfitRate,
+          netProfitRate,
+          totalFees,
+          feeEstimateSize,
           effectivePrices: {
             buyYes: effectivePrices.effectiveBuyYes,
             buyNo: effectivePrices.effectiveBuyNo,

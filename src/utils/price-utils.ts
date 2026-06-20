@@ -206,6 +206,38 @@ export interface BinaryArbitrageFeeEstimate {
   };
 }
 
+export interface MultiLegArbitrageLegInput extends FeeCurve, BuilderFeeRates {
+  price: number;
+  /** Optional label for diagnostics, such as outcome name. */
+  label?: string;
+  tokenId?: string;
+  conditionId?: string;
+}
+
+export interface MultiLegArbitrageFeeParams {
+  type: 'long' | 'short';
+  size: number;
+  legs: MultiLegArbitrageLegInput[];
+  /** Execution role for all CLOB legs. Defaults to taker. */
+  liquidityRole?: LiquidityRole;
+}
+
+export interface MultiLegArbitrageLegEstimate extends MultiLegArbitrageLegInput {
+  estimate: OrderFeeEstimate;
+}
+
+export interface MultiLegArbitrageFeeEstimate {
+  type: 'long' | 'short';
+  size: number;
+  priceSum: number;
+  grossProfit: number;
+  grossProfitPerShare: number;
+  totalFees: number;
+  netProfit: number;
+  netProfitPerShare: number;
+  legs: MultiLegArbitrageLegEstimate[];
+}
+
 export interface FeeAwareArbitrageResult {
   type: 'long' | 'short';
   grossProfit: number;
@@ -315,6 +347,58 @@ export function estimateBinaryArbitrageFees(
     netProfit,
     netProfitPerShare: netProfit / params.size,
     legs: { yes, no },
+  };
+}
+
+/**
+ * Estimate net profit for an exhaustive multi-outcome set.
+ *
+ * Long: buy every listed winning outcome, then the set pays 1 pUSD/share.
+ * Short: mint/sell every listed winning outcome, then reserve 1 pUSD/share.
+ *
+ * The caller must validate that the legs form a mutually exclusive and
+ * exhaustive event set. This helper only aggregates prices and per-leg fees.
+ */
+export function estimateMultiLegArbitrageFees(
+  params: MultiLegArbitrageFeeParams
+): MultiLegArbitrageFeeEstimate {
+  if (params.size <= 0) {
+    throw new Error('size must be positive');
+  }
+  if (params.legs.length < 2) {
+    throw new Error('at least two legs are required');
+  }
+
+  const side: FeeSide = params.type === 'long' ? 'BUY' : 'SELL';
+  const legs = params.legs.map((leg) => ({
+    ...leg,
+    estimate: estimateOrderFees({
+      ...leg,
+      side,
+      size: params.size,
+      liquidityRole: params.liquidityRole,
+    }),
+  }));
+  const priceSum = legs.reduce((sum, leg) => sum + leg.price, 0);
+  const totalFees = roundFee(
+    legs.reduce((sum, leg) => sum + leg.estimate.totalFee, 0)
+  );
+  const grossProfitPerShare = params.type === 'long'
+    ? 1 - priceSum
+    : priceSum - 1;
+  const grossProfit = grossProfitPerShare * params.size;
+  const netProfit = grossProfit - totalFees;
+
+  return {
+    type: params.type,
+    size: params.size,
+    priceSum,
+    grossProfit,
+    grossProfitPerShare,
+    totalFees,
+    netProfit,
+    netProfitPerShare: netProfit / params.size,
+    legs,
   };
 }
 

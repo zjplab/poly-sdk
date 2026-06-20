@@ -334,6 +334,7 @@ const result = await client.createOrder({
   price: 0.55,
   size: 100,
   orderType: 'GTC',  // Good-til-cancelled
+  postOnly: true,    // maker-only; rejected if it would cross the spread
 });
 
 if (result.success) {
@@ -351,6 +352,9 @@ if (result.success) {
 | `size` | `number` | Size in shares |
 | `orderType` | `'GTC' \| 'GTD'` | Order type (default: GTC) |
 | `expiration` | `number` | Expiration for GTD orders (unix seconds) |
+| `postOnly` | `boolean` | Optional maker-only flag for GTC/GTD limit orders. If the order would match immediately, CLOB rejects it instead of executing it. |
+
+`postOnly` is not a market-order/IOC control. Use `createMarketOrder({ orderType: 'FOK' | 'FAK' })` when the intent is to immediately take resting liquidity; use `postOnly: true` when the intent is to quote as maker and avoid taker execution.
 
 ---
 
@@ -991,23 +995,29 @@ Polymarket applies actual fees at match time. These methods are pre-trade estima
 
 ### ArbitrageService
 
-Arbitrage opportunity detection.
+Arbitrage opportunity detection. Binary market scanning is fee-aware by default.
 
 ```typescript
 import { ArbitrageService } from '@catalyst-team/poly-sdk';
 
-const service = new ArbitrageService(clobApi, gammaApi);
+const service = new ArbitrageService();
 
 // Scan for opportunities
-const opportunities = await service.scanForOpportunities({
-  minProfit: 0.003,  // 0.3% minimum
-  maxMarkets: 50,
-});
+const opportunities = await service.scanMarkets({
+  minVolume24h: 5000,
+  limit: 50,
+  feeAware: true,       // default
+  feeEstimateSize: 1,
+  liquidityRole: 'taker',
+}, 0.003);              // 0.3% minimum net per share
 
 for (const opp of opportunities) {
-  console.log(`${opp.type} arb: ${(opp.profit * 100).toFixed(2)}%`);
+  console.log(`${opp.arbType} arb: ${opp.profitPercent.toFixed(2)}% net`);
+  console.log(`gross=${opp.grossProfitRate}, fees=${opp.totalFees}`);
 }
 ```
+
+Set `feeAware: false` only when you intentionally want a gross prefilter. Multi-outcome / NegRisk scans are not covered by the binary scanner; aggregate those legs explicitly with `estimateMultiLegArbitrageFees()` after validating the event group.
 
 ---
 
@@ -1089,12 +1099,16 @@ if (arb) {
 
 ---
 
-### `estimateOrderFees(params)` / `estimateBinaryArbitrageFees(params)`
+### `estimateOrderFees(params)` / `estimateBinaryArbitrageFees(params)` / `estimateMultiLegArbitrageFees(params)`
 
 Pure fee estimators for tests and simulations. Use `TradingService` variants when you want the SDK to fetch live fee parameters from CLOB market info.
 
 ```typescript
-import { estimateOrderFees, estimateBinaryArbitrageFees } from '@catalyst-team/poly-sdk';
+import {
+  estimateOrderFees,
+  estimateBinaryArbitrageFees,
+  estimateMultiLegArbitrageFees,
+} from '@catalyst-team/poly-sdk';
 
 const order = estimateOrderFees({
   side: 'BUY',
@@ -1109,6 +1123,16 @@ const pair = estimateBinaryArbitrageFees({
   yesPrice: 0.49,
   noPrice: 0.49,
   rate: 0.03,
+});
+
+const multi = estimateMultiLegArbitrageFees({
+  type: 'long',
+  size: 10,
+  legs: [
+    { label: 'A', price: 0.25, rate: 0.03 },
+    { label: 'B', price: 0.35, rate: 0.03 },
+    { label: 'Any Other Score', price: 0.38, rate: 0.03 },
+  ],
 });
 ```
 

@@ -17,7 +17,7 @@ import {
   type OrderBookSummary,
 } from '@polymarket/clob-client-v2';
 import { Wallet } from 'ethers';
-import { readBuilderCodeOptional } from '../constants/builder-config.js';
+import { isActiveBuilderCode, readBuilderCodeOptional } from '../constants/builder-config.js';
 import { DataApiClient, Trade } from '../clients/data-api.js';
 import { GammaApiClient, GammaMarket } from '../clients/gamma-api.js';
 import type { UnifiedCache } from '../core/unified-cache.js';
@@ -60,7 +60,9 @@ export interface MarketFeeConfig {
   rate: number;
   exponent: number;
   takerOnly: boolean;
+  /** Builder maker fee in bps; zero unless a nonzero builder code is configured. */
   builderMakerFeeBps: number;
+  /** Builder taker fee in bps; zero unless a nonzero builder code is configured. */
   builderTakerFeeBps: number;
 }
 
@@ -137,6 +139,8 @@ export interface MarketServiceConfig {
   privateKey?: string;
   /** Chain ID (default: Polygon mainnet 137) */
   chainId?: number;
+  /** Optional V2 builder code; builder bps apply only when this is nonzero. */
+  builderCode?: string;
 }
 
 // Internal type for CLOB market data
@@ -247,7 +251,9 @@ export class MarketService {
       // is optional. We still propagate `POLY_BUILDER_CODE` if set so a
       // single SDK can be passed through to signing paths without redoing
       // setup, but never *require* it here.
-      const builderCode = readBuilderCodeOptional();
+      const builderCode = this.config?.builderCode !== undefined
+        ? this.config.builderCode
+        : readBuilderCodeOptional();
       const builderConfig = builderCode ? { builderCode } : undefined;
 
       if (this.config?.privateKey) {
@@ -507,12 +513,16 @@ export class MarketService {
         }
 
         const info = await rawClient.getClobMarketInfo(conditionId);
+        const builderCode = this.config?.builderCode !== undefined
+          ? this.config.builderCode
+          : readBuilderCodeOptional();
+        const applyBuilderFees = isActiveBuilderCode(builderCode);
         return {
           rate: Number(info.fd?.r ?? 0),
           exponent: Number(info.fd?.e ?? 1),
           takerOnly: info.fd?.to ?? true,
-          builderMakerFeeBps: Number(info.mbf ?? 0),
-          builderTakerFeeBps: Number(info.tbf ?? 0),
+          builderMakerFeeBps: applyBuilderFees ? Number(info.mbf ?? 0) : 0,
+          builderTakerFeeBps: applyBuilderFees ? Number(info.tbf ?? 0) : 0,
         };
       });
     });

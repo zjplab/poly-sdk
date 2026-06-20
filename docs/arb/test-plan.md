@@ -61,7 +61,8 @@ Arbitrage detection is only executable when it includes:
 - depth-aware VWAP for the intended size, not just top-of-book
 - net profit after CLOB platform fees and builder fees
 - explicit data source freshness checks
-- FOK/IOC or equivalent partial-fill protection
+- FOK/FAK or equivalent partial-fill protection
+- post-only only for maker quoting, not immediate arbitrage execution
 - NegRisk group validation before any multi-outcome sum strategy
 
 ---
@@ -76,6 +77,7 @@ Arbitrage detection is only executable when it includes:
 │  • checkArbitrage() - Correct arbitrage detection                            │
 │  • checkArbitrageWithFees() - Reject gross-only false positives               │
 │  • estimateOrderFees() - Platform/builder fee math and rounding               │
+│  • TradingService postOnly API passthrough and batch consistency              │
 │  • no false positives from normal mirrored spread                             │
 │  • VWAP/depth sizing for target notional                                      │
 │  • calculateRebalanceAction() - Rebalance strategy logic                     │
@@ -93,7 +95,7 @@ Arbitrage detection is only executable when it includes:
 │  • Wallet connection and balance query                                       │
 │  • CTF Split/Merge operations                                                │
 │  • Order execution (small amounts)                                           │
-│  • FOK/IOC execution rejects unsafe partial fills                             │
+│  • FOK/FAK execution rejects unsafe partial fills                             │
 │  • Rebalancer functionality                                                  │
 │  • clearPositions() smart clearing                                           │
 └─────────────────────────────────────────────────────────────────────────────┘
@@ -206,7 +208,20 @@ platformFee = 100 * 0.03 * 0.5 * 0.5 = 0.75
 // Maker fill with takerOnly=true has platformFee = 0
 ```
 
-#### Test 1.9: Rebalance Action Calculation
+#### Test 1.9: Post-Only API Passthrough
+```typescript
+// Expected:
+// createLimitOrder({ orderType: 'GTC', postOnly: true }) calls
+// client.createAndPostOrder(order, options, OrderType.GTC, true)
+//
+// presignLimitOrder({ postOnly: true }) stores postOnly in the PresignedOrder,
+// and postPresignedOrder(presigned) calls client.postOrder(signed, orderType, true).
+//
+// createBatchOrders() rejects mixed postOnly values because CLOB postOrders()
+// accepts a batch-level postOnly flag.
+```
+
+#### Test 1.10: Rebalance Action Calculation
 ```typescript
 // Scenario: pUSD too low
 usdc = 10, yesTokens = 80, noTokens = 80
@@ -234,13 +249,18 @@ const service = new ArbitrageService({ enableLogging: true });
 
 const results = await service.scanMarkets({
   minVolume24h: 5000,
-  limit: 20
+  limit: 20,
+  feeAware: true,
+  feeEstimateSize: 1,
+  liquidityRole: 'taker'
 }, 0.005);
 
 // Verify:
 // - Returns array of ScanResult
 // - Each result has valid market config
 // - Effective prices are calculated correctly
+// - Default profitRate/profitPercent are net after estimated fees
+// - grossProfitRate/netProfitRate/totalFees are populated
 // - Any executable opportunity includes size and VWAP, not only top-of-book
 // - Score is computed based on profit * volume
 ```
@@ -296,13 +316,15 @@ const markets = event.markets;
 ```typescript
 // For each market in a candidate NegRisk group:
 // - load live orderbook for the YES token
+// - load getClobMarketInfo(conditionId) for each leg's fd/mbf/tbf
 // - compute VWAP for target size
 // - use the thinnest leg to cap recommended size
-// - compute net profit after fees and gas
+// - compute net profit with estimateMultiLegArbitrageFees() plus gas/failure buffer
 
 // Expected:
 // - no opportunity is executable unless every leg has sufficient depth
 // - profit is based on VWAP, not Gamma outcomePrices alone
+// - positive gross ΣYES deviations can be rejected after fees
 ```
 
 ---
@@ -412,7 +434,7 @@ const executeResult = await service.clearPositions(market, true);
 
 #### Test 3.7: Atomic Execution Guard
 ```typescript
-// Submit a small multi-leg plan using FOK/IOC settings.
+// Submit a small multi-leg plan using FOK/FAK settings.
 // Use a deliberately tight maxSlippageBps or oversized target to force rejection.
 
 // Verify:
@@ -488,7 +510,7 @@ PROFIT_THRESHOLD = 0   // Monitor all opportunities
 | E2E | Wallet balance is correctly queried |
 | E2E | Split/Merge operations succeed |
 | E2E | Order execution works |
-| E2E | FOK/IOC guards prevent unsafe partial execution |
+| E2E | FOK/FAK guards prevent unsafe partial execution |
 | E2E | clearPositions recovers funds |
 
 ---
@@ -498,7 +520,7 @@ PROFIT_THRESHOLD = 0   // Monitor all opportunities
 1. **Financial Risk**: Test with small amounts ($5-20 max)
 2. **Execution Risk**: Always dry-run first
 3. **Network Risk**: Handle errors gracefully
-4. **Timing Risk**: Use FOK orders to avoid partial fills
+4. **Timing Risk**: Use FOK/FAK orders to control partial fills
 5. **Liquidity Risk**: Require depth-aware VWAP before execution
 6. **Resolution Risk**: Validate NegRisk grouping and market rules
 

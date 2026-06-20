@@ -17,6 +17,7 @@ import {
   calculateBuilderFee,
   estimateOrderFees,
   estimateBinaryArbitrageFees,
+  estimateMultiLegArbitrageFees,
   getEffectivePrices,
   checkArbitrage,
   checkArbitrageWithFees,
@@ -212,6 +213,42 @@ describe('Price Utilities', () => {
       expect(estimate.legs.yes.netProceeds).toBeCloseTo(5.02503, 5);
       expect(estimate.legs.no.netProceeds).toBeCloseTo(5.02503, 5);
       expect(estimate.netProfit).toBeCloseTo(0.05006, 5);
+    });
+
+    it('aggregates multi-leg fees with per-leg market configs', () => {
+      const estimate = estimateMultiLegArbitrageFees({
+        type: 'long',
+        size: 10,
+        legs: [
+          { label: 'A', price: 0.25, rate: 0.03 },
+          { label: 'B', price: 0.35, rate: 0.03 },
+          { label: 'Any Other Score', price: 0.38, rate: 0.06 },
+        ],
+      });
+
+      expect(estimate.priceSum).toBeCloseTo(0.98, 10);
+      expect(estimate.grossProfit).toBeCloseTo(0.2, 10);
+      expect(estimate.legs[2]?.estimate.platformFee).toBeCloseTo(0.14136, 5);
+      expect(estimate.totalFees).toBeCloseTo(0.26586, 5);
+      expect(estimate.netProfit).toBeCloseTo(-0.06586, 5);
+    });
+
+    it('supports short multi-leg fee estimates', () => {
+      const estimate = estimateMultiLegArbitrageFees({
+        type: 'short',
+        size: 10,
+        legs: [
+          { label: 'A', price: 0.36, rate: 0.03 },
+          { label: 'B', price: 0.36, rate: 0.03 },
+          { label: 'Other', price: 0.36, rate: 0.03 },
+        ],
+      });
+
+      expect(estimate.priceSum).toBeCloseTo(1.08, 10);
+      expect(estimate.grossProfit).toBeCloseTo(0.8, 10);
+      expect(estimate.totalFees).toBeCloseTo(0.20736, 5);
+      expect(estimate.netProfit).toBeCloseTo(0.59264, 5);
+      expect(estimate.legs[0]?.estimate.side).toBe('SELL');
     });
   });
 

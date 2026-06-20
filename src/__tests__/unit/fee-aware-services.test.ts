@@ -18,12 +18,13 @@ function makeTradingService(fakeClient: Record<string, unknown>) {
   return service;
 }
 
-function makeMarketService(fakeClient: Record<string, unknown> = {}) {
+function makeMarketService(fakeClient: Record<string, unknown> = {}, config: Record<string, unknown> = {}) {
   const service = new MarketService(
     undefined,
     undefined,
     new RateLimiter(),
-    createUnifiedCache()
+    createUnifiedCache(),
+    config as any
   );
   (service as any).initialized = true;
   (service as any).clobClient = fakeClient;
@@ -127,6 +128,45 @@ describe('fee-aware service APIs', () => {
       expect(estimate.totalCost).toBe(50.875);
     });
 
+    it('does not apply market builder bps when no builder code is configured', async () => {
+      const originalBuilderCode = process.env.POLY_BUILDER_CODE;
+      delete process.env.POLY_BUILDER_CODE;
+      try {
+        const service = new TradingService(new RateLimiter(), createUnifiedCache(), {
+          privateKey: VALID_PK,
+        });
+        (service as any).initialized = true;
+        (service as any).clobClient = {
+          tokenConditionMap: {},
+          feeInfos: {},
+          getClobMarketInfo: vi.fn(async () => ({
+            fd: { r: 0.03, e: 1, to: true },
+            mbf: 10,
+            tbf: 25,
+          })),
+        };
+
+        const estimate = await service.estimateOrderFees({
+          conditionId: 'condition-1',
+          tokenId: 'yes-token',
+          side: 'BUY',
+          price: 0.5,
+          size: 100,
+          liquidityRole: 'taker',
+        });
+
+        expect(estimate.platformFee).toBe(0.75);
+        expect(estimate.builderFee).toBe(0);
+        expect(estimate.totalFee).toBe(0.75);
+      } finally {
+        if (originalBuilderCode === undefined) {
+          delete process.env.POLY_BUILDER_CODE;
+        } else {
+          process.env.POLY_BUILDER_CODE = originalBuilderCode;
+        }
+      }
+    });
+
     it('throws when fee info cannot be loaded for a token', async () => {
       const service = makeTradingService({
         tokenConditionMap: {},
@@ -156,9 +196,25 @@ describe('fee-aware service APIs', () => {
         rate: 0.05,
         exponent: 1,
         takerOnly: true,
-        builderMakerFeeBps: 2,
-        builderTakerFeeBps: 9,
+        builderMakerFeeBps: 0,
+        builderTakerFeeBps: 0,
       });
+    });
+
+    it('includes market builder bps only when a nonzero builder code is configured', async () => {
+      const getClobMarketInfo = vi.fn(async () => ({
+        fd: { r: 0.05, e: 1, to: true },
+        mbf: 2,
+        tbf: 9,
+      }));
+      const service = makeMarketService({ getClobMarketInfo }, {
+        builderCode: VALID_BUILDER_CODE,
+      });
+
+      const config = await service.getMarketFeeConfig('condition-1');
+
+      expect(config.builderMakerFeeBps).toBe(2);
+      expect(config.builderTakerFeeBps).toBe(9);
     });
 
     it('adds feeAdjusted net fields to processed orderbooks', async () => {
