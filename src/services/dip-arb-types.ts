@@ -472,7 +472,7 @@ export interface DipArbScanOptions {
   /** 筛选底层资产 */
   coin?: DipArbUnderlying | 'all';
   /** 筛选时长 */
-  duration?: '5m' | '15m' | 'all';
+  duration?: '5m' | '15m' | '1h' | '4h' | 'all';
   /** 距离结束的最小分钟数 */
   minMinutesUntilEnd?: number;
   /** 距离结束的最大分钟数 */

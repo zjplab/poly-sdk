@@ -16,8 +16,9 @@ export type Side = 'BUY' | 'SELL';
  * - 0: Browser / EOA wallet
  * - 1: Magic / Email login (requires profile/funder address)
  * - 2: Polymarket Gnosis Safe / Builder mode
+ * - 3: Deposit wallet / POLY_1271
  */
-export type PolymarketSignatureType = 0 | 1 | 2;
+export type PolymarketSignatureType = 0 | 1 | 2 | 3;
 
 /**
  * Order type for limit/market orders
@@ -56,6 +57,7 @@ export type OrderType = 'GTC' | 'FOK' | 'GTD' | 'FAK';
  *
  * State Mapping (Polymarket API → Internal):
  * - API "live"      → open (order in orderbook, no fills)
+ * - API "unmatched" → open (accepted by CLOB, not matched yet)
  * - API "matched"   → partially_filled (some fills) OR filled (fully filled)
  * - API "delayed"   → pending (order submitted but not yet in orderbook)
  * - API "cancelled" → cancelled
@@ -83,7 +85,7 @@ export enum OrderStatus {
   /**
    * open - Order submitted and active in orderbook, no fills yet
    *
-   * Polymarket API status: "live"
+   * Polymarket API status: "live" or "unmatched"
    * Transitions:
    * - → partially_filled (first fill received)
    * - → filled (immediate full fill, rare)
@@ -97,7 +99,9 @@ export enum OrderStatus {
   /**
    * partially_filled - Order has received some fills but not complete
    *
-   * Polymarket API status: "matched" (size_matched > 0 && size_matched < original_size)
+   * Polymarket API status: "matched" (size_matched > 0 && size_matched < original_size).
+   * If an active-looking status such as "live" or "unmatched" reports size_matched > 0,
+   * local accounting still derives partially_filled from quantity.
    * Transitions:
    * - → filled (remaining size filled)
    * - → cancelled (user cancels remaining)
@@ -287,21 +291,39 @@ export interface PolySDKOptions {
   mempoolWssUrl?: string;
 
   /**
-   * Builder API credentials for fee sharing and gasless order execution.
-   * Enables Builder mode with Polymarket's Builder Relayer.
+   * V2 builder code (bytes32, e.g. `0x...64hex`). Embedded in every signed
+   * order's `Order.builder` field for on-chain attribution. Falls back to the
+   * `POLY_BUILDER_CODE` env var when omitted.
+   *
+   * Required for any path that places orders post-2026-04-28 cutover.
+   *
+   * NOTE: HMAC builder creds (`{ key, secret, passphrase }`) are NO LONGER
+   * accepted on this config. After the V2 cutover they are only consumed by
+   * `RelayerService` for gasless TX envelopes (Safe deploy / wrap / transfer);
+   * instantiate `RelayerService` directly with `RelayerServiceConfig.builderCreds`
+   * if you need that path.
    */
-  builderCreds?: {
-    key: string;
-    secret: string;
-    passphrase: string;
-  };
+  builderCode?: string;
 
   /**
    * Gnosis Safe address for Builder mode.
-   * When provided with builderCreds, orders use Safe as maker/funder.
+   * When provided with `builderCode`, orders are signed by the EOA owner but
+   * use the Safe as maker/funder (`SignatureTypeV2.POLY_GNOSIS_SAFE`).
    * Derive via RelayerService.getSafeAddress() or deploy via RelayerService.deploySafe().
    */
   safeAddress?: string;
+
+  /**
+   * Enable debug logging for SmartMoneyService (copy trading flow).
+   * When true, prints detailed logs for polling, mempool detection, filters, and order execution.
+   * Default: false.
+   */
+  smartMoneyDebug?: boolean;
+
+  /**
+   * Alias for smartMoneyDebug. Use either smartMoneyDebug or debug.
+   */
+  debug?: boolean;
 }
 
 // K-Line interval types
